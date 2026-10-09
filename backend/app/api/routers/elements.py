@@ -75,7 +75,7 @@ def copy_element(
     if src is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "要素记录不存在")
     data = {c.name: getattr(src, c.name) for c in src.__table__.columns}
-    for k in ("id", "version", "created_at", "updated_at"):
+    for k in ("id", "version", "created_at", "updated_at", "created_by", "updated_by"):
         data.pop(k, None)
     element = DeclarationElement(**data, created_by=user.id, updated_by=user.id)
     db.add(element)
