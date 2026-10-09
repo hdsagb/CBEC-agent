@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# 环境与密钥
+.env
+*.p12
+*.keystore
+
+# 数据与上传
+*.db
+*.sqlite3
+uploads/
+
+# Node
+node_modules/
+dist/
+*.local
+
+# IDE / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
