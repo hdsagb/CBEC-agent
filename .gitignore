@@ -20,6 +20,7 @@ uploads/
 node_modules/
 dist/
 *.local
+*.tsbuildinfo
 
 # IDE / 系统
 .idea/

@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -6,12 +8,61 @@ from app.api.deps import get_current_user, require_role
 from app.db import get_db
 from app.models.declaration_element import DeclarationElement
 from app.models.user import User
-from app.schemas.element import ElementCreate, ElementOut, ElementUpdate
+from app.schemas.element import (
+    DeclarationText,
+    ElementCreate,
+    ElementOut,
+    ElementPage,
+    ElementUpdate,
+)
 
 router = APIRouter(prefix="/api/elements", tags=["elements"])
 
+# 报关格式文本的字段顺序与中文标签
+_TEXT_FIELDS: list[tuple[str, str]] = [
+    ("hs_code", "HS编码"),
+    ("product_name", "商品名称"),
+    ("name_en", "英文名称"),
+    ("customer_name", "客户名称"),
+    ("brand", "品牌"),
+    ("model", "型号"),
+    ("spec", "规格"),
+    ("material", "材质"),
+    ("usage", "用途"),
+]
 
-@router.get("", response_model=list[ElementOut])
+
+def _parse_extra(elements_json: str) -> list[dict]:
+    try:
+        data = json.loads(elements_json or "[]")
+    except (ValueError, TypeError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _build_declaration_text(element: DeclarationElement) -> str:
+    """把要素记录拼成可直接粘贴到报关单的文本。"""
+    lines: list[str] = []
+    for field, label in _TEXT_FIELDS:
+        value = str(getattr(element, field, "") or "").strip()
+        if value:
+            lines.append(f"{label}：{value}")
+    extra = _parse_extra(element.elements_json)
+    extra_lines = []
+    for item in extra:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "") or "").strip()
+        value = str(item.get("value", "") or "").strip()
+        if name or value:
+            extra_lines.append(f"  {name}：{value}")
+    if extra_lines:
+        lines.append("其它要素：")
+        lines.extend(extra_lines)
+    return "\n".join(lines)
+
+
+@router.get("", response_model=ElementPage)
 def list_elements(
     keyword: str = Query("", description="产品名/客户名/HS编码 模糊搜索"),
     hs_code: str = Query(""),
@@ -20,7 +71,7 @@ def list_elements(
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
-) -> list[DeclarationElement]:
+) -> ElementPage:
     q = db.query(DeclarationElement)
     if hs_code:
         q = q.filter(DeclarationElement.hs_code.contains(hs_code))
@@ -36,7 +87,14 @@ def list_elements(
                 DeclarationElement.name_en.like(like),
             )
         )
-    return q.order_by(DeclarationElement.updated_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    total = q.count()
+    items = (
+        q.order_by(DeclarationElement.updated_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return ElementPage(items=items, total=total, page=page, page_size=page_size)
 
 
 @router.get("/{element_id}", response_model=ElementOut)
@@ -49,6 +107,19 @@ def get_element(
     if element is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "要素记录不存在")
     return element
+
+
+@router.get("/{element_id}/declaration-text", response_model=DeclarationText)
+def get_declaration_text(
+    element_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> DeclarationText:
+    """一键复制：生成报关格式文本。"""
+    element = db.get(DeclarationElement, element_id)
+    if element is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "要素记录不存在")
+    return DeclarationText(text=_build_declaration_text(element))
 
 
 @router.post("", response_model=ElementOut)

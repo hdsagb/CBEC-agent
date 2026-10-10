@@ -25,6 +25,21 @@ class ElementOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ElementPage(BaseModel):
+    """分页信封：列表 + 总数，供前端分页器使用。"""
+
+    items: list[ElementOut]
+    total: int
+    page: int
+    page_size: int
+
+
+class DeclarationText(BaseModel):
+    """一键复制的报关格式文本。"""
+
+    text: str
+
+
 class ElementCreate(BaseModel):
     hs_code: str
     product_name: str

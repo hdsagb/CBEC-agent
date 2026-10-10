@@ -51,32 +51,37 @@ def test_d2_list_default_pagination(client, users, sample_elements):
     resp = client.get("/api/elements", headers=users["customs"]["headers"])
     assert resp.status_code == 200
     body = resp.json()
-    assert len(body) == 3
+    assert body["total"] == 3
+    assert body["page"] == 1
+    assert body["page_size"] == 20
+    assert len(body["items"]) == 3
 
 
 def test_d3_keyword_fuzzy_search(client, users, sample_elements):
     resp = client.get("/api/elements", params={"keyword": "蓝牙"}, headers=users["customs"]["headers"])
     body = resp.json()
-    assert len(body) == 1
-    assert body[0]["product_name"] == "蓝牙耳机"
+    assert body["total"] == 1
+    assert body["items"][0]["product_name"] == "蓝牙耳机"
 
 
 def test_d4_filter_by_hs_code_and_customer(client, users, sample_elements):
     # hs_code 子串匹配
     resp = client.get("/api/elements", params={"hs_code": "8517"}, headers=users["customs"]["headers"])
-    assert {r["hs_code"] for r in resp.json()} == {"8517.62", "8517.13"}
+    assert {r["hs_code"] for r in resp.json()["items"]} == {"8517.62", "8517.13"}
     # 客户过滤
     resp = client.get("/api/elements", params={"customer_name": "华为"}, headers=users["customs"]["headers"])
     body = resp.json()
-    assert len(body) == 1
-    assert body[0]["customer_name"] == "华为"
+    assert body["total"] == 1
+    assert body["items"][0]["customer_name"] == "华为"
 
 
 def test_d5_pagination_page2(client, users, sample_elements):
     resp = client.get("/api/elements", params={"page": 2, "page_size": 2}, headers=users["customs"]["headers"])
     body = resp.json()
-    assert len(body) == 1
-    assert body[0]["id"] in sample_elements
+    # total 反映全量，items 只返回当前页
+    assert body["total"] == 3
+    assert len(body["items"]) == 1
+    assert body["items"][0]["id"] in sample_elements
 
 
 def test_d6_pagination_validation(client, users, sample_elements):
@@ -117,5 +122,32 @@ def test_d10_delete_then_hidden_from_list(client, users, sample_elements):
     resp = client.delete(f"/api/elements/{sample_elements[0]}", headers=users["admin"]["headers"])
     assert resp.status_code == 200
     remaining = client.get("/api/elements", headers=users["customs"]["headers"]).json()
-    assert len(remaining) == 2
-    assert sample_elements[0] not in [r["id"] for r in remaining]
+    assert remaining["total"] == 2
+    assert sample_elements[0] not in [r["id"] for r in remaining["items"]]
+
+
+def test_d11_declaration_text_format(client, users, sample_elements):
+    resp = client.get(f"/api/elements/{sample_elements[0]}/declaration-text",
+                      headers=users["customs"]["headers"])
+    assert resp.status_code == 200, resp.text
+    text = resp.json()["text"]
+    assert "HS编码：8517.62" in text
+    assert "商品名称：蓝牙耳机" in text
+    assert "客户名称：沃尔玛" in text
+    # 空字段（如 usage 之外的空值）不产生空行
+    assert "：\n" not in text + "\n"
+
+
+def test_d12_declaration_text_includes_extra_elements(client, users):
+    payload = _payload(elements_json='[{"name":"成分含量","value":"ABS 60%"}]')
+    created = client.post("/api/elements", json=payload, headers=users["customs"]["headers"]).json()
+    resp = client.get(f"/api/elements/{created['id']}/declaration-text",
+                      headers=users["customs"]["headers"])
+    text = resp.json()["text"]
+    assert "其它要素：" in text
+    assert "成分含量：ABS 60%" in text
+
+
+def test_d13_declaration_text_404(client, users, sample_elements):
+    assert client.get("/api/elements/9999/declaration-text",
+                      headers=users["customs"]["headers"]).status_code == 404
