@@ -272,9 +272,15 @@ async function handleExport(jobId: number, format: 'pdf' | 'png') {
   try {
     const res = await exportMarkJob(jobId, format)
     if (res.url) {
-      window.open(res.url, '_blank')
+      // 导出接口是异步 await 之后才拿到 url，用 a 标签触发避免被当作弹窗拦截
+      const link = document.createElement('a')
+      link.href = res.url
+      link.target = '_blank'
+      link.rel = 'noopener'
+      link.click()
+      ElMessage.success(res.message || '导出完成')
     } else {
-      ElMessage.info(res.message || '导出引擎待实现')
+      ElMessage.info(res.message || '导出失败')
     }
   } catch (e) {
     ElMessage.error(errorMessage(e, '导出失败'))

@@ -6,6 +6,7 @@ from app.db import get_db
 from app.models.mark import MarkJob, MarkTemplate
 from app.models.user import User
 from app.schemas.mark import MarkExportRequest, MarkJobCreate, MarkJobOut, MarkTemplateCreate, MarkTemplateOut
+from app.services import mark_render
 
 router = APIRouter(prefix="/api/marks", tags=["marks"])
 
@@ -61,8 +62,23 @@ def export_job(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
-    """导出 300dpi PDF/PNG。骨架阶段返回占位；P2 实现渲染引擎。"""
+    """导出 300dpi 箱唛：PDF 一箱一页，PNG 多箱竖向拼接。"""
     job = db.get(MarkJob, job_id)
     if job is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
-    return {"job_id": job_id, "format": req.format, "url": "", "message": "导出引擎待实现（P2）"}
+    template = db.get(MarkTemplate, job.template_id)
+    if template is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "模板不存在")
+    fmt = (req.format or "pdf").lower()
+    if fmt not in ("pdf", "png"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"不支持的导出格式: {req.format}")
+    try:
+        result = mark_render.export_box_mark(job, template, fmt)
+    except mark_render.MarkFontMissingError as exc:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc)) from exc
+    return {
+        "job_id": job_id,
+        "format": fmt,
+        "url": result["url"],
+        "message": result["message"],
+    }

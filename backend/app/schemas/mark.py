@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class MarkTemplateOut(BaseModel):
@@ -20,8 +20,8 @@ class MarkTemplateCreate(BaseModel):
 class MarkJobCreate(BaseModel):
     template_id: int
     order_no: str = ""
-    total_boxes: int = 1
-    start_no: int = 1
+    total_boxes: int = Field(1, ge=1, le=10000)
+    start_no: int = Field(1, ge=1)
     fields_json: str = "{}"
 
 

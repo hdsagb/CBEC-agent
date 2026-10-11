@@ -14,6 +14,8 @@ _TEST_DB = Path(tempfile.gettempdir()) / "_pytest_cbec.db"
 if _TEST_DB.exists():
     _TEST_DB.unlink()
 os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB.as_posix()}"
+# 导出产物写入临时目录，避免污染开发库的 ./uploads
+os.environ["UPLOAD_DIR"] = str(Path(tempfile.gettempdir()) / "_pytest_cbec_uploads")
 
 import pytest
 from fastapi.testclient import TestClient

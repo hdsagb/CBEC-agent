@@ -95,7 +95,8 @@ npm run dev
 | `LLM_PROVIDER` | LLM 适配层标识 | `deepseek` |
 | `DEEPSEEK_API_KEY` | DeepSeek 平台 API Key | 空 |
 | `DEEPSEEK_MODEL` | 模型名 | `deepseek-chat` |
-| `UPLOAD_DIR` | 报价单等上传文件目录 | `./uploads` |
+| `UPLOAD_DIR` | 报价单等上传文件、箱唛导出产物的目录 | `./uploads` |
+| `MARK_FONT_FILE` | 箱唛导出使用的中文 TrueType 字体路径；留空则自动探测系统字体 | 空 |
 
 ## 部署
 
@@ -107,6 +108,30 @@ docker compose -f deploy/docker-compose.yml up -d --build
 - Web：<http://localhost:8080>（nginx 托管 `frontend/dist` 构建产物并反代 `/api`）
 - 前端构建产物需先执行 `npm run build` 生成（或让 CI/镜像内构建）。
 - 生产对外使用请配置域名 + HTTPS。
+
+### 中文字体（箱唛导出必需）
+
+箱唛导出由 reportlab / Pillow 渲染，运行时必须能取到一款**中文 TrueType 字体**。
+`fonts-noto-cjk` 提供的是 CFF 轮廓（sfnt tag `OTTO`），reportlab 无法嵌入、导出 PDF 会失败，
+请改用 TrueType 轮廓的中文字体（文泉驿、Droid Sans Fallback 等）。取不到可用字体时，
+导出接口会返回 500 并提示。查找顺序：
+
+1. 环境变量 `MARK_FONT_FILE` 指定的字体文件；
+2. 仓库内 `backend/app/assets/fonts/` 下自放的 `.ttf` / `.ttc`；
+3. 系统字体：Windows 微软雅黑 / 黑体 / 宋体，Linux 文泉驿 / Droid，macOS PingFang。
+
+`backend/Dockerfile` 已内置安装 `fonts-wqy-microhei` 与 `fonts-droid-fallback`，无需额外处理。
+非 Docker 部署请自行安装，例如：
+
+```bash
+# Debian / Ubuntu
+apt-get install -y fonts-wqy-microhei fonts-droid-fallback
+# RHEL / openSUSE
+dnf install -y wqy-microhei-fonts
+```
+
+装完可用 `fc-list :lang=zh` 确认中文字体是否就绪；也可把任意 TrueType 字体文件挂载进容器，
+再用 `MARK_FONT_FILE` 指向它。
 
 ## 第三方参考
 

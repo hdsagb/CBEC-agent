@@ -1,7 +1,9 @@
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.api.routers import agent, auth, elements, marks, quotes
 from app.core.config import settings
@@ -30,6 +32,10 @@ app.include_router(elements.router)
 app.include_router(quotes.router)
 app.include_router(marks.router)
 app.include_router(agent.router)
+
+# 导出产物（箱唛 PDF/PNG 等）通过 /uploads 直链访问
+os.makedirs(settings.upload_dir, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=settings.upload_dir), name="uploads")
 
 
 @app.get("/api/health")
