@@ -55,14 +55,27 @@ def chat(
     user: User = Depends(get_current_user),
 ) -> ChatMessage:
     """Agent 对话入口：LLM + Function Calling 调度 search_elements / compare_quotes / create_marks。"""
-    if req.session_id is not None:
+    if req.session_id is None:
+        session = ChatSession(user_id=user.id)
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+    else:
         session = db.get(ChatSession, req.session_id)
         if session is None or session.user_id != user.id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "会话不存在")
+
+    session_id = session.id
+    # 首条消息用作会话标题，避免会话列表全部显示默认名
+    if session.title == "新会话" and req.content.strip():
+        session.title = req.content.strip()[:20]
+    # 持久化用户消息，保证刷新后仍能看到完整对话
+    db.add(ChatMessage(session_id=session_id, role="user", content=req.content))
     db.commit()
-    reply, tool_results = run_agent_turn(db, user, req.session_id, req.content)
+
+    reply, tool_results = run_agent_turn(db, user, session_id, req.content)
     message = ChatMessage(
-        session_id=req.session_id or 0,
+        session_id=session_id,
         role="assistant",
         content=reply,
         tool_calls_json=str([r.model_dump() for r in tool_results]),

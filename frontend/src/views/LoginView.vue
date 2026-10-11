@@ -1,8 +1,8 @@
 <template>
   <div class="login-page">
     <el-card class="login-card">
-      <h2 class="title">跨境电商智能 Agent</h2>
-      <p class="subtitle">登录以继续</p>
+      <h2 class="title">CBEC Agent</h2>
+      <p class="subtitle">跨境电商智能助理 · 登录以继续</p>
       <el-form :model="form" label-position="top" @keyup.enter="handleLogin">
         <el-form-item label="用户名">
           <el-input v-model="form.username" placeholder="用户名" />
@@ -36,7 +36,7 @@ async function handleLogin() {
   loading.value = true
   try {
     await auth.login(form.username, form.password)
-    router.push({ path: '/dashboard' })
+    router.push({ path: '/agent' })
   } catch (e: unknown) {
     const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? '登录失败'
     ElMessage.error(msg)
@@ -52,10 +52,11 @@ async function handleLogin() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f0f2f5;
+  background: var(--bg);
 }
 .login-card {
   width: 380px;
+  border-radius: var(--radius-lg);
 }
 .title {
   text-align: center;
@@ -63,7 +64,8 @@ async function handleLogin() {
 }
 .subtitle {
   text-align: center;
-  color: #909399;
+  color: var(--muted);
+  font-size: 12.5px;
   margin: 0 0 20px;
 }
 .submit {

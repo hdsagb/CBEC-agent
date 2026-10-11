@@ -15,7 +15,8 @@ const router = createRouter({
       path: '/',
       component: MainLayout,
       children: [
-        { path: '', redirect: '/dashboard' },
+        { path: '', redirect: '/agent' },
+        { path: 'agent', name: 'agent', component: () => import('@/views/AgentView.vue') },
         { path: 'dashboard', name: 'dashboard', component: () => import('@/views/DashboardView.vue') },
         { path: 'elements', name: 'elements', component: () => import('@/views/ElementsView.vue') },
         { path: 'quotes', name: 'quotes', component: () => import('@/views/QuotesView.vue') },
