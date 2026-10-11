@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 
@@ -18,6 +18,13 @@ class QuoteBatch(Base):
     status: Mapped[str] = mapped_column(String(32), default="uploaded")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
+    sources: Mapped[list["QuoteSource"]] = relationship(
+        back_populates="batch",
+        cascade="all, delete-orphan",
+        order_by="QuoteSource.id",
+        lazy="selectin",
+    )
+
 
 class QuoteSource(Base):
     """一个报价来源：一份上传文件（一家供应商）。"""
@@ -33,6 +40,11 @@ class QuoteSource(Base):
     parse_status: Mapped[str] = mapped_column(String(32), default="pending")
     supplier_name: Mapped[str] = mapped_column(String(128), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    batch: Mapped["QuoteBatch"] = relationship(back_populates="sources")
+    items: Mapped[list["QuoteItem"]] = relationship(
+        back_populates="source", cascade="all, delete-orphan", order_by="QuoteItem.id"
+    )
 
 
 class QuoteItem(Base):
@@ -54,6 +66,8 @@ class QuoteItem(Base):
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
     confirmed: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    source: Mapped["QuoteSource"] = relationship(back_populates="items")
 
 
 class Comparison(Base):

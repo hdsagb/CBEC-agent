@@ -71,8 +71,30 @@ def _exec_search_elements(db: Session, user, args: dict) -> dict:
 
 
 def _exec_compare_quotes(db: Session, user, args: dict) -> dict:
-    # P3 实现真实比价引擎，当前返回占位
-    return {"batch_id": args.get("batch_id"), "result": [], "message": "比价引擎待实现（P3）"}
+    from app.services.comparison import compare_batch
+
+    batch_id = args.get("batch_id")
+    if batch_id is None:
+        return {"error": "缺少 batch_id"}
+    try:
+        result = compare_batch(db, int(batch_id), args.get("weights") or None)
+    except ValueError as e:
+        return {"error": str(e)}
+    return {
+        "batch_id": result["batch_id"],
+        "weights": result["weights"],
+        "recommended_source_id": result["recommended_source_id"],
+        "recommended_supplier": result["recommended_supplier"],
+        "products": [
+            {
+                "product_name": g["product_name"],
+                "spec": g["spec"],
+                "best_supplier": g["best_supplier"],
+                "best_item_id": g["best_item_id"],
+            }
+            for g in result["result"]
+        ],
+    }
 
 
 def _exec_create_marks(db: Session, user, args: dict) -> dict:

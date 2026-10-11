@@ -9,8 +9,8 @@ from app.core.config import settings
 from app.db import get_db
 from app.models.quote import QuoteBatch, QuoteItem, QuoteSource
 from app.models.user import User
-from app.parsers import router as parser_router
 from app.schemas.quote import CompareRequest, QuoteBatchOut, QuoteItemConfirm, QuoteItemOut
+from app.services import comparison, quote_parser
 
 router = APIRouter(prefix="/api/quotes", tags=["quotes"])
 
@@ -38,10 +38,23 @@ def list_batches(
     return db.query(QuoteBatch).order_by(QuoteBatch.created_at.desc()).all()
 
 
+@router.get("/batches/{batch_id}", response_model=QuoteBatchOut)
+def get_batch(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> QuoteBatch:
+    batch = db.get(QuoteBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "批次不存在")
+    return batch
+
+
 @router.post("/batches/{batch_id}/sources", response_model=QuoteBatchOut)
 async def upload_source(
     batch_id: int,
     file: UploadFile,
+    supplier_name: str = "",
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> QuoteBatch:
@@ -65,6 +78,7 @@ async def upload_source(
         file_type=ext.lstrip("."),
         raw_file_url=saved_path,
         parse_status="pending",
+        supplier_name=supplier_name or os.path.splitext(file.filename or "")[0],
     )
     db.add(source)
     batch.status = "parsing"
@@ -73,27 +87,37 @@ async def upload_source(
     return batch
 
 
-@router.post("/sources/{source_id}/parse", response_model=QuoteItemOut)
+@router.post("/sources/{source_id}/parse", response_model=list[QuoteItemOut])
 def parse_source(
     source_id: int,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
-) -> QuoteItem:
-    """触发解析管道：格式路由 → 解析器 → LLM 结构化抽取 → 生成待确认明细。
-
-    骨架阶段返回占位结果；管道实现见 app/parsers 与 app/services/llm。
-    """
+) -> list[QuoteItem]:
+    """触发解析管道：格式路由 → 规则抽取 / LLM 结构化 → 生成待确认明细。"""
     source = db.get(QuoteSource, source_id)
     if source is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "报价来源不存在")
     source.parse_status = "parsing"
     db.commit()
-    items = parser_router.parse_file(source.raw_file_url, source.file_type, db=db)
-    source.parse_status = "success" if items else "failed"
-    db.commit()
+    items = quote_parser.parse_source(source, db)
     if not items:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "解析失败，请人工录入")
-    return items[0]
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "解析失败，请人工录入明细"
+        )
+    return items
+
+
+@router.post("/batches/{batch_id}/parse", response_model=list[QuoteItemOut])
+def parse_batch(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[QuoteItem]:
+    """一键解析批次下全部来源。"""
+    batch = db.get(QuoteBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "批次不存在")
+    return quote_parser.parse_batch(batch_id, db)
 
 
 @router.get("/batches/{batch_id}/items", response_model=list[QuoteItemOut])
@@ -125,7 +149,32 @@ def confirm_item(
     item.confirmed = True
     db.commit()
     db.refresh(item)
+    _sync_confirmed_status(item.source_id, db)
     return item
+
+
+def _sync_confirmed_status(source_id: int, db: Session) -> None:
+    """当批次内明细全部确认后，把批次状态推进到 confirmed。"""
+    source = db.get(QuoteSource, source_id)
+    if source is None:
+        return
+    batch_id = source.batch_id
+    unconfirmed = (
+        db.query(QuoteItem)
+        .join(QuoteSource, QuoteItem.source_id == QuoteSource.id)
+        .filter(QuoteSource.batch_id == batch_id, QuoteItem.confirmed.is_(False))
+        .count()
+    )
+    total = (
+        db.query(QuoteItem)
+        .join(QuoteSource, QuoteItem.source_id == QuoteSource.id)
+        .filter(QuoteSource.batch_id == batch_id)
+        .count()
+    )
+    batch = db.get(QuoteBatch, batch_id)
+    if batch is not None and total > 0 and unconfirmed == 0:
+        batch.status = "confirmed"
+        db.commit()
 
 
 @router.post("/batches/{batch_id}/compare")
@@ -135,8 +184,8 @@ def compare_batch(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
-    """按权重配置对已确认明细计算比价排序。骨架阶段返回占位结果。"""
+    """按权重配置对已确认明细计算比价排序，结果落库 Comparison。"""
     batch = db.get(QuoteBatch, batch_id)
     if batch is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "批次不存在")
-    return {"batch_id": batch_id, "weights": req.weight_config, "result": [], "message": "比价引擎待实现（P3）"}
+    return comparison.compare_batch(db, batch_id, req.weight_config)

@@ -55,6 +55,7 @@ class QuoteBatchOut(BaseModel):
 
 
 class CompareRequest(BaseModel):
-    batch_id: int
+    # 批次 ID 由路径提供，body 中可选
+    batch_id: int | None = None
     # 维度权重：{"price": 0.5, "moq": 0.2, "lead_time": 0.2, "confidence": 0.1}
     weight_config: dict[str, float] = {}
