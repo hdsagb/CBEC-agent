@@ -1,32 +1,41 @@
 <template>
-  <div class="elements-page">
-    <!-- 筛选栏 -->
-    <el-card shadow="never" class="filter-card">
-      <el-form :inline="true" @submit.prevent>
-        <el-form-item label="关键词">
-          <el-input
-            v-model="query.keyword"
-            placeholder="产品名 / 客户名 / HS编码 / 英文名"
-            clearable
-            style="width: 260px"
-            @keyup.enter="handleSearch"
-          />
-        </el-form-item>
-        <el-form-item label="HS编码">
-          <el-input v-model="query.hs_code" placeholder="如 8517" clearable style="width: 140px" @keyup.enter="handleSearch" />
-        </el-form-item>
-        <el-form-item label="客户">
-          <el-input v-model="query.customer_name" placeholder="客户名称" clearable style="width: 160px" @keyup.enter="handleSearch" />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :loading="loading" @click="handleSearch">查询</el-button>
-          <el-button @click="handleReset">重置</el-button>
-        </el-form-item>
-      </el-form>
-      <div class="toolbar">
-        <el-button v-if="canEdit" type="primary" @click="openCreate">新建要素</el-button>
+  <div class="page">
+    <div class="page-inner">
+      <div class="page-head">
+        <div>
+          <h1>申报要素库</h1>
+          <p>按「客户 + 产品」沉淀报关要素，检索复用、一键复制报关文本。</p>
+        </div>
+        <div class="actions">
+          <el-button v-if="canEdit" type="primary" @click="openCreate">新建要素</el-button>
+        </div>
       </div>
-    </el-card>
+
+      <div class="elements-page">
+        <!-- 筛选栏 -->
+        <el-card shadow="never" class="filter-card">
+          <el-form :inline="true" @submit.prevent>
+            <el-form-item label="关键词">
+              <el-input
+                v-model="query.keyword"
+                placeholder="产品名 / 客户名 / HS编码 / 英文名"
+                clearable
+                style="width: 260px"
+                @keyup.enter="handleSearch"
+              />
+            </el-form-item>
+            <el-form-item label="HS编码">
+              <el-input v-model="query.hs_code" placeholder="如 8517" clearable style="width: 140px" @keyup.enter="handleSearch" />
+            </el-form-item>
+            <el-form-item label="客户">
+              <el-input v-model="query.customer_name" placeholder="客户名称" clearable style="width: 160px" @keyup.enter="handleSearch" />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="loading" @click="handleSearch">查询</el-button>
+              <el-button @click="handleReset">重置</el-button>
+            </el-form-item>
+          </el-form>
+        </el-card>
 
     <!-- 列表 -->
     <el-card shadow="never" class="table-card">
@@ -177,12 +186,15 @@
         <el-button type="primary" @click="copyToClipboard(declarationText)">复制到剪贴板</el-button>
       </template>
     </el-dialog>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 
 import {
   copyElement,
@@ -197,6 +209,7 @@ import {
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
+const route = useRoute()
 
 const ROLE_LEVEL: Record<string, number> = { merchandiser: 0, customs: 1, admin: 2 }
 const canEdit = computed(() => (ROLE_LEVEL[auth.user?.role ?? ''] ?? -1) >= 1)
@@ -415,7 +428,14 @@ async function handleDelete(row: ElementItem) {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  // 支持顶栏全局搜索带词进入
+  const keyword = route.query.keyword
+  if (typeof keyword === 'string' && keyword.trim()) {
+    query.keyword = keyword.trim()
+  }
+  load()
+})
 </script>
 
 <style scoped>
@@ -434,10 +454,6 @@ onMounted(load)
   flex-wrap: wrap;
   gap: 12px;
 }
-.toolbar {
-  display: flex;
-  align-items: center;
-}
 .table-card :deep(.el-card__body) {
   padding-top: 12px;
 }
@@ -445,7 +461,7 @@ onMounted(load)
   font-weight: 500;
 }
 .cell-sub {
-  color: #909399;
+  color: var(--muted);
   font-size: 12px;
 }
 .pager {
