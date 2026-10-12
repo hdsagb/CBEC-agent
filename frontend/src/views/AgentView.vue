@@ -155,6 +155,58 @@
                   </table>
                   <div v-else class="card-ft muted">该批次暂无可比价结果（请先确认明细）</div>
                 </div>
+
+                <div v-for="(card, i) in exportCards(turn)" :key="`m${i}`" class="data-card">
+                  <div class="card-hd">
+                    <ToolIcon name="export_marks" />
+                    <b>箱唛导出 · 任务 #{{ card.jobId ?? '—' }}</b>
+                    <span class="hint">{{ card.format.toUpperCase() }}</span>
+                  </div>
+                  <div class="card-ft">
+                    <a class="dl" :href="card.url" target="_blank" rel="noopener">
+                      <svg viewBox="0 0 24 24" fill="none">
+                        <path d="M12 3v10m0 0l-3.6-3.6M12 13l3.6-3.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                        <path d="M4 16v2.5A2.5 2.5 0 0 0 6.5 21h11a2.5 2.5 0 0 0 2.5-2.5V16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+                      </svg>
+                      下载 {{ card.format.toUpperCase() }}
+                    </a>
+                    <span class="note">{{ card.message }}</span>
+                  </div>
+                </div>
+
+                <div v-for="(card, i) in importCards(turn)" :key="`i${i}`" class="data-card">
+                  <div class="card-hd">
+                    <ToolIcon name="import_elements" />
+                    <b>申报要素批量导入</b>
+                    <span class="hint">新增 {{ card.created }} · 跳过重复 {{ card.skipped }} · 无效 {{ card.invalid }}</span>
+                  </div>
+                  <ul v-if="card.errors.length" class="err-list">
+                    <li v-for="(msg, ei) in card.errors" :key="ei">{{ msg }}</li>
+                  </ul>
+                  <div v-else class="card-ft muted">全部记录已按「HS编码 + 商品名称 + 客户名称」去重处理</div>
+                </div>
+
+                <div v-for="(card, i) in batchCards(turn)" :key="`b${i}`" class="data-card">
+                  <div class="card-hd">
+                    <ToolIcon name="list_quote_batches" />
+                    <b>比价批次</b>
+                    <span class="hint">共 {{ card.items.length }} 个</span>
+                  </div>
+                  <table v-if="card.items.length">
+                    <thead>
+                      <tr><th>批次</th><th>名称</th><th>状态</th><th>供应商</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="b in card.items" :key="b.batchId">
+                        <td>#{{ b.batchId }}</td>
+                        <td>{{ b.name || '—' }}</td>
+                        <td>{{ b.status || '—' }}</td>
+                        <td>{{ b.sourceCount }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div v-else class="card-ft muted">暂无比价批次</div>
+                </div>
               </div>
             </div>
           </template>
@@ -275,12 +327,16 @@ const SUGGESTIONS = [
   '帮我查一下沃尔玛蓝牙耳机的申报要素',
   '对比批次 #1 的供应商报价，推荐最优供应商',
   '用标准出口唛生成一个 120 箱的箱唛任务',
+  '把订单 SO-20261010-003 的箱唛导出成 PDF',
 ]
 
 const CAPABILITY_LABEL: Record<string, string> = {
   search_elements: '检索申报要素',
   compare_quotes: '多供应商比价',
   create_marks: '生成箱唛任务',
+  export_marks: '导出箱唛文件',
+  import_elements: '批量导入要素',
+  list_quote_batches: '查询比价批次',
 }
 
 const auth = useAuthStore()
@@ -359,7 +415,7 @@ function capabilityLabel(name: string): string {
 
 function toolClass(name: string): string {
   if (name === 'search_elements') return 'violet'
-  if (name === 'create_marks') return 'amber'
+  if (name === 'create_marks' || name === 'export_marks') return 'amber'
   return ''
 }
 
@@ -373,6 +429,11 @@ function toolMeta(tr: ToolResult): string {
   if (tr.name === 'search_elements') return `命中 ${asText(r.count) || asArray(r.items).length} 条记录`
   if (tr.name === 'compare_quotes') return `批次 #${asText(r.batch_id) || '—'} · ${asArray(r.products).length} 个商品`
   if (tr.name === 'create_marks') return `任务 #${asText(r.job_id) || '—'} · ${asText(r.total_boxes) || '—'} 箱`
+  if (tr.name === 'export_marks') return `任务 #${asText(r.job_id) || '—'} · ${asText(r.format).toUpperCase()} 文件`
+  if (tr.name === 'import_elements') {
+    return `新增 ${asText(r.created) || 0} · 跳过 ${asText(r.skipped) || 0} · 无效 ${asText(r.invalid) || 0}`
+  }
+  if (tr.name === 'list_quote_batches') return `共 ${asText(r.count) || 0} 个批次`
   return capabilityLabel(tr.name)
 }
 
@@ -382,6 +443,8 @@ function toolStat(tr: ToolResult): string {
     const r = asRecord(tr.result)
     return `命中 ${asText(r.count) || asArray(r.items).length} 条`
   }
+  if (tr.name === 'import_elements') return `新增 ${asText(asRecord(tr.result).created) || 0} 条`
+  if (tr.name === 'export_marks') return '已出图'
   return '完成'
 }
 
@@ -404,7 +467,7 @@ function highlightJson(json: string): string {
     .replace(/:\s*(-?\d+(?:\.\d+)?)/g, ': <span class="v">$1</span>')
 }
 
-/** 后端 tool_calls_json 为 Python 字面量，优先按 JSON 解析，失败再尝试单引号替换 */
+/** 后端 tool_calls_json 为标准 JSON 数组，解析失败时尝试单引号替换兼容旧数据 */
 function parseToolResults(raw: string): ToolResult[] {
   if (!raw) return []
   for (const text of [raw, raw.replace(/'/g, '"')]) {
@@ -458,6 +521,51 @@ function compareCards(turn: ChatTurn): { batchId: number | null; recommended: st
         }),
       }
     })
+}
+
+function exportCards(turn: ChatTurn): { jobId: number | null; format: string; url: string; message: string }[] {
+  return turn.toolResults
+    .filter((tr) => tr.name === 'export_marks' && !asRecord(tr.result).error)
+    .map((tr) => {
+      const r = asRecord(tr.result)
+      return {
+        jobId: asNumber(r.job_id),
+        format: asText(r.format) || 'pdf',
+        url: asText(r.url),
+        message: asText(r.message),
+      }
+    })
+    .filter((card) => card.url)
+}
+
+function importCards(turn: ChatTurn): { created: number; skipped: number; invalid: number; errors: string[] }[] {
+  return turn.toolResults
+    .filter((tr) => tr.name === 'import_elements' && !asRecord(tr.result).error)
+    .map((tr) => {
+      const r = asRecord(tr.result)
+      return {
+        created: asNumber(r.created) ?? 0,
+        skipped: asNumber(r.skipped) ?? 0,
+        invalid: asNumber(r.invalid) ?? 0,
+        errors: asArray(r.errors).map((msg) => asText(msg)),
+      }
+    })
+}
+
+function batchCards(turn: ChatTurn): { items: { batchId: number; name: string; status: string; sourceCount: number }[] }[] {
+  return turn.toolResults
+    .filter((tr) => tr.name === 'list_quote_batches' && !asRecord(tr.result).error)
+    .map((tr) => ({
+      items: asArray(asRecord(tr.result).items).map((raw) => {
+        const o = asRecord(raw)
+        return {
+          batchId: asNumber(o.batch_id) ?? -1,
+          name: asText(o.name),
+          status: asText(o.status),
+          sourceCount: asNumber(o.source_count) ?? 0,
+        }
+      }),
+    }))
 }
 
 function toTurns(messages: ChatMessage[]): ChatTurn[] {
@@ -1103,6 +1211,49 @@ onMounted(async () => {
 .card-ft.muted {
   font-size: 12px;
   display: block;
+}
+
+.dl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--brand-500);
+  background: var(--brand-050);
+  color: var(--brand-600);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 650;
+  text-decoration: none;
+  transition: 0.15s;
+}
+
+.dl:hover {
+  background: var(--brand-500);
+  color: #fff;
+}
+
+.dl svg {
+  width: 14px;
+  height: 14px;
+}
+
+.note {
+  font-size: 11.5px;
+  color: var(--muted);
+  align-self: center;
+}
+
+.err-list {
+  margin: 0;
+  padding: 11px 14px 11px 30px;
+  font-size: 12px;
+  color: #a15c00;
+  line-height: 1.7;
+}
+
+.err-list li {
+  list-style: disc;
 }
 
 /* ---- composer ---- */

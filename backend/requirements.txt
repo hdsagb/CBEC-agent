@@ -16,6 +16,9 @@ psycopg2-binary>=2.9
 # 箱唛渲染（PDF / PNG）
 reportlab>=4.0
 pillow>=10.0
+# 箱唛画布元素：二维码 / 条形码（Code128）实时生成
+qrcode>=7.4
+python-barcode>=0.15
 
 # dev / test
 pytest>=8.0

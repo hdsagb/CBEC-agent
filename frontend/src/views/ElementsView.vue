@@ -7,7 +7,11 @@
           <p>按「客户 + 产品」沉淀报关要素，检索复用、一键复制报关文本。</p>
         </div>
         <div class="actions">
+          <el-button v-if="canEdit" link type="primary" @click="handleDownloadTemplate">下载模板</el-button>
+          <el-button v-if="canEdit" :loading="importing" @click="triggerImport">导入 Excel</el-button>
+          <el-button :loading="exporting" @click="handleExport">导出 Excel</el-button>
           <el-button v-if="canEdit" type="primary" @click="openCreate">新建要素</el-button>
+          <input ref="fileInputRef" type="file" accept=".xlsx,.xlsm" class="hidden-file" @change="handleImportFile" />
         </div>
       </div>
 
@@ -200,8 +204,11 @@ import {
   copyElement,
   createElement,
   deleteElement,
+  downloadElementTemplate,
+  exportElements,
   fetchDeclarationText,
   fetchElements,
+  importElements,
   updateElement,
   type ElementItem,
   type ElementPayload,
@@ -232,6 +239,10 @@ const extraRows = ref<{ name: string; value: string }[]>([])
 
 const textVisible = ref(false)
 const declarationText = ref('')
+
+const exporting = ref(false)
+const importing = ref(false)
+const fileInputRef = ref<HTMLInputElement>()
 
 const emptyForm = (): ElementPayload => ({
   hs_code: '',
@@ -428,6 +439,81 @@ async function handleDelete(row: ElementItem) {
   }
 }
 
+/** 触发浏览器下载（blob 用 download 属性指定文件名） */
+function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
+function stamp(): string {
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`
+}
+
+/** 导出当前筛选条件下的全部记录 */
+async function handleExport() {
+  exporting.value = true
+  try {
+    const blob = await exportElements({
+      keyword: query.keyword || undefined,
+      hs_code: query.hs_code || undefined,
+      customer_name: query.customer_name || undefined,
+    })
+    saveBlob(blob, `申报要素_${stamp()}.xlsx`)
+    ElMessage.success('导出完成')
+  } catch (e) {
+    ElMessage.error(errorMessage(e, '导出失败'))
+  } finally {
+    exporting.value = false
+  }
+}
+
+async function handleDownloadTemplate() {
+  try {
+    saveBlob(await downloadElementTemplate(), '申报要素导入模板.xlsx')
+  } catch (e) {
+    ElMessage.error(errorMessage(e, '模板下载失败'))
+  }
+}
+
+function triggerImport() {
+  fileInputRef.value?.click()
+}
+
+async function handleImportFile(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  importing.value = true
+  try {
+    const res = await importElements(file)
+    const summary = `共 ${res.total} 行：新增 ${res.created}，重复跳过 ${res.skipped}，无效 ${res.invalid}`
+    if (res.invalid > 0) {
+      await ElMessageBox.alert(`${summary}\n\n${res.errors.join('\n')}`, '导入完成（部分行未导入）', {
+        confirmButtonText: '知道了',
+      }).catch(() => undefined)
+    } else {
+      ElMessage.success(summary)
+    }
+    if (res.created > 0) {
+      query.page = 1
+      load()
+    }
+  } catch (e) {
+    ElMessage.error(errorMessage(e, '导入失败'))
+  } finally {
+    importing.value = false
+    input.value = '' // 允许连续导入同一个文件
+  }
+}
+
 onMounted(() => {
   // 支持顶栏全局搜索带词进入
   const keyword = route.query.keyword
@@ -481,5 +567,8 @@ onMounted(() => {
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;
+}
+.hidden-file {
+  display: none;
 }
 </style>

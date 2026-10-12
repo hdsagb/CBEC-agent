@@ -8,7 +8,7 @@
         </div>
         <div class="actions">
           <button class="btn" type="button" :disabled="loading" @click="load">刷新</button>
-          <button class="btn primary" type="button" @click="openTemplateDialog">新建模板</button>
+          <button class="btn primary" type="button" @click="openEditor(null)">新建模板</button>
         </div>
       </div>
 
@@ -22,19 +22,21 @@
               <path d="M3 9h18M7 13h4M7 16h7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
             </svg>
             <span>暂无箱唛模板</span>
-            <span>点击右上角「新建模板」创建第一个模板，之后即可基于模板创建导出任务。</span>
+            <span>点击右上角「新建模板」进入可视化编辑器，拖拽摆好文字、Logo、二维码与条形码后保存。</span>
           </div>
         </div>
       </div>
 
       <template v-else>
         <div class="tpl-grid">
-          <button
+          <div
             v-for="(tpl, idx) in templates"
             :key="tpl.id"
             class="tpl"
-            type="button"
+            role="button"
+            tabindex="0"
             @click="openJobDialog(tpl.id)"
+            @keyup.enter="openJobDialog(tpl.id)"
           >
             <img v-if="tpl.thumbnail_url" class="thumb-img" :src="tpl.thumbnail_url" :alt="tpl.name" />
             <div v-else class="thumb">{{ `SHIPPING MARK ${String(idx + 1).padStart(2, '0')}` }}</div>
@@ -42,9 +44,10 @@
               <b>{{ tpl.name }}</b>
               <span>{{ layoutPreview(tpl.layout_json) }}</span>
             </div>
-          </button>
+            <button class="tpl-edit" type="button" @click.stop="openEditor(tpl)">可视化编辑</button>
+          </div>
         </div>
-        <p class="grid-tip">点击模板卡片可直接基于该模板创建箱唛任务。</p>
+        <p class="grid-tip">点击模板卡片可基于该模板创建箱唛任务；点「可视化编辑」进入画布调整版式。</p>
       </template>
 
       <div class="panel" style="margin-top: 18px">
@@ -85,24 +88,27 @@
       </div>
     </div>
 
-    <!-- 新建模板 -->
-    <el-dialog v-model="templateDialogVisible" title="新建箱唛模板" width="520px">
-      <el-form @submit.prevent>
-        <el-form-item label="模板名称">
-          <el-input v-model="templateForm.name" placeholder="如 标准出口唛" @keyup.enter="submitTemplate" />
-        </el-form-item>
-        <el-form-item label="版式定义">
-          <el-input
-            v-model="templateForm.layout_json"
-            type="textarea"
-            :rows="6"
-            placeholder='JSON 版式，如 {"rows":["品名","箱号","重量"]}'
-          />
-        </el-form-item>
-      </el-form>
+    <!-- 可视化模板编辑器 -->
+    <el-dialog
+      v-model="editorVisible"
+      :title="editingTemplateId === null ? '新建箱唛模板' : '可视化编辑箱唛模板'"
+      width="1120px"
+      top="4vh"
+      destroy-on-close
+    >
+      <MarkCanvasEditor
+        v-if="editorVisible"
+        :key="editorKey"
+        :name="editorName"
+        :layout="editorLayout"
+        :assets="assets"
+        @update:name="editorName = $event"
+        @update:layout="editorLayout = $event"
+        @assets-changed="loadAssets"
+      />
       <template #footer>
-        <el-button @click="templateDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submittingTemplate" @click="submitTemplate">创建</el-button>
+        <el-button @click="editorVisible = false">取消</el-button>
+        <el-button type="primary" :loading="savingTemplate" @click="submitEditor">保存模板</el-button>
       </template>
     </el-dialog>
 
@@ -144,23 +150,63 @@
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
 
+import MarkCanvasEditor from '@/components/MarkCanvasEditor.vue'
 import {
   createMarkJob,
   createMarkTemplate,
   exportMarkJob,
+  fetchMarkAssets,
   fetchMarkJobs,
   fetchMarkTemplates,
+  updateMarkTemplate,
+  type MarkAsset,
   type MarkJob,
+  type MarkLayout,
   type MarkTemplate,
 } from '@/api/marks'
 
 const loading = ref(false)
 const templates = ref<MarkTemplate[]>([])
 const jobs = ref<MarkJob[]>([])
+const assets = ref<MarkAsset[]>([])
 
-const templateDialogVisible = ref(false)
-const submittingTemplate = ref(false)
-const templateForm = reactive({ name: '', layout_json: '{}' })
+// 可视化编辑器：editingTemplateId 为 null 表示新建
+const editorVisible = ref(false)
+const editorKey = ref(0)
+const editorName = ref('')
+const editorLayout = ref<MarkLayout>(emptyLayout())
+const editingTemplateId = ref<number | null>(null)
+const savingTemplate = ref(false)
+
+function emptyLayout(): MarkLayout {
+  return {
+    width_mm: 100,
+    height_mm: 100,
+    dpi: 300,
+    margin_mm: 4,
+    border: true,
+    title: '',
+    footer: '',
+    separator: ': ',
+    rows: [],
+    blocks: [],
+  }
+}
+
+/** 宽松解析版式 JSON：非法内容一律回落空白版式，避免编辑器打不开。 */
+function parseLayout(text: string): MarkLayout {
+  let raw: Record<string, unknown>
+  try {
+    raw = JSON.parse(text || '{}')
+  } catch {
+    return emptyLayout()
+  }
+  if (!raw || typeof raw !== 'object') return emptyLayout()
+  const layout = { ...emptyLayout(), ...raw } as MarkLayout
+  layout.rows = Array.isArray(raw.rows) ? (raw.rows as MarkLayout['rows']) : []
+  layout.blocks = Array.isArray(raw.blocks) ? (raw.blocks as MarkLayout['blocks']) : []
+  return layout
+}
 
 const jobDialogVisible = ref(false)
 const submittingJob = ref(false)
@@ -183,9 +229,14 @@ function templateName(templateId: number): string {
 }
 
 function layoutPreview(layoutJson: string): string {
-  const text = (layoutJson || '').trim()
-  if (!text || text === '{}') return '未设置版式'
-  return text.length > 40 ? `${text.slice(0, 40)}…` : text
+  const layout = parseLayout(layoutJson)
+  const parts = [`${layout.width_mm}×${layout.height_mm}mm`]
+  const rows = layout.rows?.length ?? 0
+  const blocks = layout.blocks?.length ?? 0
+  if (rows) parts.push(`${rows} 行字段`)
+  if (blocks) parts.push(`${blocks} 个画布元素`)
+  if (!rows && !blocks && !layout.title && !layout.footer) parts.push('空版式')
+  return parts.join(' · ')
 }
 
 function errorMessage(e: unknown, fallback: string): string {
@@ -199,6 +250,7 @@ async function load() {
     const [tpls, jobList] = await Promise.all([fetchMarkTemplates(), fetchMarkJobs()])
     templates.value = tpls
     jobs.value = jobList
+    await loadAssets()
   } catch (e) {
     ElMessage.error(errorMessage(e, '加载箱唛数据失败'))
   } finally {
@@ -206,28 +258,44 @@ async function load() {
   }
 }
 
-function openTemplateDialog() {
-  templateForm.name = ''
-  templateForm.layout_json = '{}'
-  templateDialogVisible.value = true
+async function loadAssets() {
+  try {
+    assets.value = await fetchMarkAssets()
+  } catch (e) {
+    ElMessage.error(errorMessage(e, '加载素材失败'))
+  }
 }
 
-async function submitTemplate() {
-  const name = templateForm.name.trim()
+function openEditor(template: MarkTemplate | null) {
+  editingTemplateId.value = template ? template.id : null
+  editorName.value = template ? template.name : ''
+  editorLayout.value = template ? parseLayout(template.layout_json) : emptyLayout()
+  editorKey.value += 1 // 强制重挂载编辑器，确保 draft 与本次模板一致
+  editorVisible.value = true
+}
+
+async function submitEditor() {
+  const name = editorName.value.trim()
   if (!name) {
     ElMessage.warning('请输入模板名称')
     return
   }
-  submittingTemplate.value = true
+  savingTemplate.value = true
+  const layoutJson = JSON.stringify(editorLayout.value)
   try {
-    await createMarkTemplate(name, templateForm.layout_json.trim() || '{}')
-    templateDialogVisible.value = false
-    ElMessage.success('模板已创建')
+    if (editingTemplateId.value === null) {
+      await createMarkTemplate(name, layoutJson)
+      ElMessage.success('模板已创建')
+    } else {
+      await updateMarkTemplate(editingTemplateId.value, { name, layout_json: layoutJson })
+      ElMessage.success('模板已保存')
+    }
+    editorVisible.value = false
     await load()
   } catch (e) {
-    ElMessage.error(errorMessage(e, '创建模板失败'))
+    ElMessage.error(errorMessage(e, '保存模板失败'))
   } finally {
-    submittingTemplate.value = false
+    savingTemplate.value = false
   }
 }
 
@@ -292,7 +360,28 @@ onMounted(load)
 
 <style scoped>
 .tpl {
-  padding: 0;
+  position: relative;
+  cursor: pointer;
+}
+
+.tpl-edit {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.55);
+  color: #fff;
+  cursor: pointer;
+  transition: 0.15s;
+  z-index: 1;
+}
+
+.tpl-edit:hover {
+  background: var(--brand-500);
 }
 
 .thumb-img {

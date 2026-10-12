@@ -40,6 +40,16 @@ class DeclarationText(BaseModel):
     text: str
 
 
+class ElementImportResult(BaseModel):
+    """Excel 导入结果汇总：invalid 为校验失败行数，errors 为逐行说明（截断）。"""
+
+    total: int
+    created: int
+    skipped: int
+    invalid: int
+    errors: list[str]
+
+
 class ElementCreate(BaseModel):
     hs_code: str
     product_name: str

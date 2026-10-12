@@ -50,6 +50,22 @@ export interface ElementQuery {
   page_size?: number
 }
 
+/** 导出/模板共用的筛选条件（不含分页） */
+export interface ElementExportQuery {
+  keyword?: string
+  hs_code?: string
+  customer_name?: string
+}
+
+/** Excel 导入结果汇总 */
+export interface ElementImportResult {
+  total: number
+  created: number
+  skipped: number
+  invalid: number
+  errors: string[]
+}
+
 export function fetchElements(params: ElementQuery) {
   return http.get<ElementPage>('/elements', { params })
 }
@@ -78,4 +94,21 @@ export function copyElement(id: number) {
 /** 一键复制：获取报关格式文本 */
 export function fetchDeclarationText(id: number) {
   return http.get<{ text: string }>(`/elements/${id}/declaration-text`)
+}
+
+/** 按当前筛选条件导出全部匹配记录（xlsx 二进制） */
+export function exportElements(params: ElementExportQuery) {
+  return http.get<Blob>('/elements/export', { params, responseType: 'blob' })
+}
+
+/** 下载空白导入模板（仅表头） */
+export function downloadElementTemplate() {
+  return http.get<Blob>('/elements/template', { responseType: 'blob' })
+}
+
+/** 批量导入要素（xlsx） */
+export function importElements(file: File) {
+  const data = new FormData()
+  data.append('file', file)
+  return http.post<ElementImportResult>('/elements/import', data)
 }

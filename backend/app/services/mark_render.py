@@ -15,6 +15,17 @@
 rows 元素可以是字符串（视作 fields_json 的键）或
 ``{"label": "箱号", "value": "C/NO. {box_no} OF {total_boxes}"}``。
 
+blocks 元素是绝对定位的画布元素，用 ``kind`` 区分类型（省略即 text）：
+
+- ``text``：``{"kind":"text","text":"...","x_mm":6,"y_mm":8,"w_mm":40,"size":12,"bold":true,"align":"left"}``
+- ``image``：``{"kind":"image","src":"/uploads/assets/xxx.png","x_mm":6,"y_mm":60,"w_mm":30,"h_mm":30}``
+- ``qrcode``：``{"kind":"qrcode","text":"https://x/{order_no}","x_mm":60,"y_mm":6,"size_mm":25}``
+- ``barcode``：``{"kind":"barcode","text":"{order_no}","x_mm":6,"y_mm":86,"w_mm":70,"h_mm":12}``
+
+图片类元素的内容支持占位变量；text 为空（或未选素材）时该元素跳过不绘制。
+二维码用 qrcode 库、条形码用 python-barcode（Code128）在渲染时实时生成，
+因此 PDF 与 PNG 两种产物上的码完全一致。
+
 占位变量：``{order_no}`` ``{box_no}`` ``{total_boxes}`` ``{box_range}``，
 以及 fields_json 中的任意键（如 ``{品名}``）。未知占位符渲染为空串。
 
@@ -56,6 +67,14 @@ _font_cache: tuple[str, int] | None = None
 
 class MarkFontMissingError(RuntimeError):
     """系统与仓库均未找到可用的中文 TrueType 字体。"""
+
+
+class MarkAssetMissingError(RuntimeError):
+    """版式引用的图片素材不存在或地址非法。"""
+
+
+class MarkBarcodeError(RuntimeError):
+    """二维码 / 条形码内容无法编码。"""
 
 
 def _has_truetype_outlines(path: str) -> bool:
@@ -107,8 +126,12 @@ def resolve_font() -> tuple[str, int]:
 
 
 MARKS_SUBDIR = "marks"
+ASSETS_SUBDIR = "assets"
 MAX_PDF_PAGES = 500
 MAX_PNG_BOXES = 20
+
+# 画布元素类型：text 为默认，其余为图片类元素
+BLOCK_KINDS = ("text", "image", "qrcode", "barcode")
 
 _PLACEHOLDER = re.compile(r"\{([^{}]+)\}")
 
@@ -221,6 +244,131 @@ def _rows_ops(layout: dict, ctx: dict) -> list[dict]:
     return rows
 
 
+UPLOADS_PREFIX = "/uploads/"
+
+
+def assets_dir() -> str:
+    """素材（Logo 等）在本地的存放目录。"""
+    return os.path.join(settings.upload_dir, ASSETS_SUBDIR)
+
+
+def local_asset_path(url: str) -> str | None:
+    """把 ``/uploads/xxx`` 形式的素材地址映射为本地绝对路径。
+
+    非本站地址（外链）与目录穿越路径一律返回 None，由调用方报错。
+    """
+    if not url.startswith(UPLOADS_PREFIX):
+        return None
+    relative = url[len(UPLOADS_PREFIX):].replace("\\", "/")
+    normalised = os.path.normpath(relative)
+    if not relative or normalised.startswith(("..", "/")) or os.path.isabs(normalised):
+        return None
+    return os.path.join(settings.upload_dir, normalised)
+
+
+def _qr_image(text: str, target_px: int):
+    """把文本编码成二维码位图（正方形，边长 target_px 像素）。"""
+    import qrcode
+    from PIL import Image
+
+    qr = qrcode.QRCode(border=2, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=8)
+    qr.add_data(text)
+    try:
+        qr.make(fit=True)
+    except Exception as exc:  # qrcode 对超长/非法内容抛 DataOverflowError 等
+        raise MarkBarcodeError(f"二维码内容无法编码: {text}") from exc
+    modules = qr.modules_count + qr.border * 2
+    qr.box_size = max(1, round(target_px / modules))
+    img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+    return img.resize((target_px, target_px), Image.NEAREST)
+
+
+def _barcode_image(text: str, target_w: int, target_h: int):
+    """把文本编码成 Code128 条形码位图并拉伸填满目标像素框。"""
+    from barcode import Code128
+    from barcode.writer import ImageWriter
+    from PIL import Image
+
+    module_height = max(1.0, target_h * 72.0 / 300.0 / MM)  # 以 300dpi 反推毫米高度
+    options = {
+        "module_width": 0.3,
+        "module_height": module_height,
+        "quiet_zone": 0.5,
+        "write_text": False,  # 不写文字，避免依赖条码字体
+        "text_distance": 0,
+        "font_size": 0,
+    }
+    try:
+        img = Code128(text, writer=ImageWriter()).render(options).convert("RGB")
+    except Exception as exc:
+        raise MarkBarcodeError(f"条形码内容无法编码: {text}") from exc
+    return img.resize((target_w, target_h), Image.LANCZOS)
+
+
+def _block_image(kind: str, block: dict, text: str, w_pt: float, h_pt: float, dpi: int):
+    """按元素类型产出位图；文本为空时返回 None（该元素跳过不绘制）。"""
+    from PIL import Image
+
+    scale = dpi / 72.0
+    target_w = max(1, round(w_pt * scale))
+    target_h = max(1, round(h_pt * scale))
+
+    if kind in ("image", "logo"):
+        src = str(block.get("src") or block.get("file_url") or "").strip()
+        if not src:
+            return None
+        path = local_asset_path(src)
+        if path is None or not os.path.isfile(path):
+            raise MarkAssetMissingError(f"版式引用的图片素材不存在或地址非法: {src}")
+        try:
+            with Image.open(path) as handle:
+                handle.load()
+                return handle.convert("RGB").copy()
+        except OSError as exc:
+            raise MarkAssetMissingError(f"图片素材无法解码: {src}") from exc
+
+    if not text.strip():
+        return None
+    if kind == "qrcode":
+        return _qr_image(text, target_w)
+    return _barcode_image(text, target_w, target_h)
+
+
+def _block_op(block: dict, layout: dict, ctx: dict, width: float, margin: float) -> dict | None:
+    """把一个画布元素解析成绘制指令（text 或 image）。"""
+    x = _num(block.get("x_mm"), layout["margin_mm"]) * MM
+    y = _num(block.get("y_mm"), 0.0) * MM
+    kind = str(block.get("kind") or "text").strip().lower()
+    if kind not in BLOCK_KINDS:
+        kind = "text"
+
+    if kind == "text":
+        size = _num(block.get("size"), 10.0)
+        block_w = _num(block["w_mm"], 0.0) * MM if block.get("w_mm") is not None else max(0.0, width - x - margin)
+        return {
+            "kind": "text", "x": x, "y": y, "w": block_w,
+            "text": _sub(block.get("text", ""), ctx), "size": size,
+            "align": str(block.get("align", "left")), "bold": bool(block.get("bold", False)),
+        }
+
+    text = _sub(block.get("text", block.get("value", "")), ctx)
+    if kind == "qrcode":
+        side = max(2.0, _num(block.get("size_mm", block.get("w_mm")), 25.0)) * MM
+        w_pt = h_pt = side
+    elif kind == "barcode":
+        default_w_mm = max(10.0, (width - x - margin) / MM)
+        w_pt = max(5.0, _num(block.get("w_mm"), default_w_mm)) * MM
+        h_pt = max(3.0, _num(block.get("h_mm"), 15.0)) * MM
+    else:  # image / logo
+        w_pt = max(1.0, _num(block.get("w_mm"), 30.0)) * MM
+        h_pt = max(1.0, _num(block.get("h_mm"), 30.0)) * MM
+
+    image = _block_image(kind, block, text, w_pt, h_pt, layout["dpi"])
+    if image is None:
+        return None
+    return {"kind": "image", "image": image, "x": x, "y": y, "w": w_pt, "h": h_pt}
+
+
 def render_ops(layout: dict, job, fields: dict, box_no: int) -> tuple[float, float, list[dict]]:
     """生成单箱的绘制指令，返回 (画布宽 pt, 画布高 pt, 指令列表)。"""
     ctx = _context(job, fields, box_no)
@@ -268,14 +416,9 @@ def render_ops(layout: dict, job, fields: dict, box_no: int) -> tuple[float, flo
         )
 
     for block in layout["blocks"]:
-        size = _num(block.get("size"), 10.0)
-        x = _num(block.get("x_mm"), layout["margin_mm"]) * MM
-        y = _num(block.get("y_mm"), 0.0) * MM
-        block_w = _num(block["w_mm"], 0.0) * MM if block.get("w_mm") is not None else max(0.0, width - x - margin)
-        ops.append(
-            {"kind": "text", "x": x, "y": y, "w": block_w, "text": _sub(block.get("text", ""), ctx),
-             "size": size, "align": str(block.get("align", "left")), "bold": bool(block.get("bold", False))}
-        )
+        op = _block_op(block, layout, ctx, width, margin)
+        if op is not None:
+            ops.append(op)
     return width, height, ops
 
 
@@ -294,6 +437,7 @@ def _split_lines(text: str) -> list[str]:
 
 def render_pdf(layout: dict, job, fields: dict, out_path: str) -> int:
     """渲染多页 PDF（每箱一页），返回实际页数。"""
+    from reportlab.lib.utils import ImageReader
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfgen import canvas as rl_canvas
 
@@ -312,6 +456,13 @@ def render_pdf(layout: dict, job, fields: dict, out_path: str) -> int:
             elif op["kind"] == "line":
                 pdf.setLineWidth(op["lw"])
                 pdf.line(op["x1"], height - op["y1"], op["x2"], height - op["y2"])
+            elif op["kind"] == "image":
+                # 图片类元素（Logo/二维码/条形码）：op 内直接携带已生成好的位图
+                pdf.drawImage(
+                    ImageReader(op["image"]),
+                    op["x"], height - op["y"] - op["h"], op["w"], op["h"],
+                    preserveAspectRatio=False, mask="auto",
+                )
             else:
                 size, text = op["size"], op["text"]
                 text_obj = pdf.beginText()
@@ -336,13 +487,12 @@ def render_pdf(layout: dict, job, fields: dict, out_path: str) -> int:
     return pages
 
 
-def render_png(layout: dict, job, fields: dict, out_path: str) -> int:
-    """渲染 PNG：多箱按顺序竖向拼接成一张图，返回绘制的箱数。"""
+def render_png_box(layout: dict, job, fields: dict, box_no: int):
+    """渲染单箱 PNG 位图，返回 (PIL.Image, 宽 pt, 高 pt)。拼接与预览共用。"""
     from PIL import Image, ImageDraw, ImageFont
 
     dpi = layout["dpi"]
     scale = dpi / 72.0
-    boxes = min(job.total_boxes, MAX_PNG_BOXES)
     font_path, font_index = resolve_font()
 
     def px(value: float) -> float:
@@ -351,54 +501,96 @@ def render_png(layout: dict, job, fields: dict, out_path: str) -> int:
     def line_width(value: float) -> int:
         return max(1, round(value * scale))
 
+    width, height, ops = render_ops(layout, job, fields, box_no)
+    box = Image.new("RGB", (round(px(width)), round(px(height))), "white")
+    draw = ImageDraw.Draw(box)
+    for op in ops:
+        if op["kind"] == "rect":
+            draw.rectangle(
+                [px(op["x"]), px(op["y"]), px(op["x"] + op["w"]), px(op["y"] + op["h"])],
+                outline="black",
+                width=line_width(op["lw"]),
+            )
+        elif op["kind"] == "line":
+            draw.line(
+                [px(op["x1"]), px(op["y1"]), px(op["x2"]), px(op["y2"])],
+                fill="black",
+                width=line_width(op["lw"]),
+            )
+        elif op["kind"] == "image":
+            target = (max(1, round(px(op["w"]))), max(1, round(px(op["h"]))))
+            source = op["image"]
+            resample = Image.LANCZOS if source.width > target[0] else Image.NEAREST
+            box.paste(source.resize(target, resample), (round(px(op["x"])), round(px(op["y"]))))
+        else:
+            size = op["size"]
+            font = ImageFont.truetype(font_path, max(1, round(px(size))), index=font_index)
+            for index, line in enumerate(_split_lines(op["text"])):
+                text_w = draw.textlength(line, font=font)
+                if op["align"] == "center":
+                    x = px(op["x"]) + (px(op["w"]) - text_w) / 2
+                elif op["align"] == "right":
+                    x = px(op["x"]) + px(op["w"]) - text_w
+                else:
+                    x = px(op["x"])
+                draw.text(
+                    (x, px(op["y"]) + index * px(size) * 1.25),
+                    line,
+                    font=font,
+                    fill="black",
+                    anchor="la",
+                    stroke_width=1 if op["bold"] else 0,
+                    stroke_fill="black",
+                )
+    return box, width, height
+
+
+def render_png(layout: dict, job, fields: dict, out_path: str) -> int:
+    """渲染 PNG：多箱按顺序竖向拼接成一张图，返回绘制的箱数。"""
+    from PIL import Image
+
+    boxes = min(job.total_boxes, MAX_PNG_BOXES)
     sheet = None
     for offset in range(boxes):
-        width, height, ops = render_ops(layout, job, fields, job.start_no + offset)
-        box = Image.new("RGB", (round(px(width)), round(px(height))), "white")
-        draw = ImageDraw.Draw(box)
-        for op in ops:
-            if op["kind"] == "rect":
-                draw.rectangle(
-                    [px(op["x"]), px(op["y"]), px(op["x"] + op["w"]), px(op["y"] + op["h"])],
-                    outline="black",
-                    width=line_width(op["lw"]),
-                )
-            elif op["kind"] == "line":
-                draw.line(
-                    [px(op["x1"]), px(op["y1"]), px(op["x2"]), px(op["y2"])],
-                    fill="black",
-                    width=line_width(op["lw"]),
-                )
-            else:
-                size = op["size"]
-                font = ImageFont.truetype(font_path, max(1, round(px(size))), index=font_index)
-                for index, line in enumerate(_split_lines(op["text"])):
-                    text_w = draw.textlength(line, font=font)
-                    if op["align"] == "center":
-                        x = px(op["x"]) + (px(op["w"]) - text_w) / 2
-                    elif op["align"] == "right":
-                        x = px(op["x"]) + px(op["w"]) - text_w
-                    else:
-                        x = px(op["x"])
-                    draw.text(
-                        (x, px(op["y"]) + index * px(size) * 1.25),
-                        line,
-                        font=font,
-                        fill="black",
-                        anchor="la",
-                        stroke_width=1 if op["bold"] else 0,
-                        stroke_fill="black",
-                    )
+        box, _, _ = render_png_box(layout, job, fields, job.start_no + offset)
         if sheet is None:
             sheet = Image.new("RGB", (box.width, box.height * boxes), "white")
         sheet.paste(box, (0, offset * box.height))
     assert sheet is not None
-    sheet.save(out_path, dpi=(dpi, dpi))
+    sheet.save(out_path, dpi=(layout["dpi"], layout["dpi"]))
     return boxes
 
 
 def marks_dir() -> str:
     return os.path.join(settings.upload_dir, MARKS_SUBDIR)
+
+
+def save_asset_bytes(data: bytes, ext: str) -> str:
+    """把上传的素材落盘，返回可被版式引用的 /uploads 地址。"""
+    out_dir = assets_dir()
+    os.makedirs(out_dir, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}{ext}"
+    with open(os.path.join(out_dir, filename), "wb") as handle:
+        handle.write(data)
+    return f"{UPLOADS_PREFIX}{ASSETS_SUBDIR}/{filename}"
+
+
+def export_preview(layout: dict, job, fields: dict, box_no: int) -> dict:
+    """把「临时版式 + 字段」渲染成单箱 PNG，供可视化编辑器所见即所得预览。"""
+    out_dir = marks_dir()
+    os.makedirs(out_dir, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.png"
+    path = os.path.join(out_dir, filename)
+    image, width, height = render_png_box(layout, job, fields, box_no)
+    image.save(path, dpi=(layout["dpi"], layout["dpi"]))
+    return {
+        "filename": filename,
+        "path": path,
+        "url": f"/uploads/{MARKS_SUBDIR}/{filename}",
+        "width_px": image.width,
+        "height_px": image.height,
+        "message": f"预览已生成（{round(width / MM)}×{round(height / MM)}mm @ {layout['dpi']}dpi）",
+    }
 
 
 def export_box_mark(job, template, fmt: str) -> dict:

@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -54,7 +56,7 @@ def chat(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> ChatMessage:
-    """Agent 对话入口：LLM + Function Calling 调度 search_elements / compare_quotes / create_marks。"""
+    """Agent 对话入口：LLM + Function Calling 调度 AGENT_TOOLS 中注册的业务工具。"""
     if req.session_id is None:
         session = ChatSession(user_id=user.id)
         db.add(session)
@@ -73,12 +75,13 @@ def chat(
     db.add(ChatMessage(session_id=session_id, role="user", content=req.content))
     db.commit()
 
-    reply, tool_results = run_agent_turn(db, user, session_id, req.content)
+    reply, tool_results = run_agent_turn(db, user, session_id)
     message = ChatMessage(
         session_id=session_id,
         role="assistant",
         content=reply,
-        tool_calls_json=str([r.model_dump() for r in tool_results]),
+        # 存为标准 JSON，前端可直接 JSON.parse
+        tool_calls_json=json.dumps([r.model_dump() for r in tool_results], ensure_ascii=False),
     )
     db.add(message)
     db.commit()
