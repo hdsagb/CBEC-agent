@@ -14,17 +14,30 @@
       <div class="conv-scroll">
         <div v-if="sessionsLoading" class="conv-hint">加载中…</div>
         <template v-else-if="sessions.length">
-          <button
+          <div
             v-for="s in sessions"
             :key="s.id"
             class="conv"
             :class="{ 'is-active': s.id === activeSessionId }"
-            type="button"
-            @click="selectSession(s.id)"
           >
-            <b>{{ s.title || '新会话' }}</b>
-            <span>#{{ s.id }}</span>
-          </button>
+            <button class="conv-main" type="button" @click="selectSession(s.id)">
+              <b>{{ s.title || '新会话' }}</b>
+              <span>#{{ s.id }}</span>
+            </button>
+            <span class="conv-acts">
+              <button class="act" type="button" title="重命名" @click.stop="handleRename(s)">
+                <svg viewBox="0 0 24 24" fill="none">
+                  <path d="M4 20h4l10-10-4-4L4 16v4Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
+                  <path d="M13.5 6.5l4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+                </svg>
+              </button>
+              <button class="act danger" type="button" title="删除" @click.stop="handleDelete(s)">
+                <svg viewBox="0 0 24 24" fill="none">
+                  <path d="M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </button>
+            </span>
+          </div>
         </template>
         <div v-else class="conv-hint">暂无会话，点击「新建」开始</div>
       </div>
@@ -285,15 +298,17 @@
 </template>
 
 <script setup lang="ts">
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import {
   createAgentSession,
+  deleteAgentSession,
   fetchAgentMessages,
   fetchAgentSessions,
   fetchAgentTools,
+  renameAgentSession,
   sendAgentMessage,
   type AgentTool,
   type ChatMessage,
@@ -672,6 +687,56 @@ async function handleNewSession() {
   }
 }
 
+async function handleRename(session: ChatSession) {
+  let title = ''
+  try {
+    const { value } = await ElMessageBox.prompt('请输入新的会话名称', '重命名会话', {
+      inputValue: session.title || '新会话',
+      inputPlaceholder: '会话名称',
+      inputValidator: (v: string) => (v && v.trim() ? true : '名称不能为空'),
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+    })
+    title = value.trim()
+  } catch {
+    // 用户取消或关闭弹窗
+    return
+  }
+  if (!title || title === session.title) return
+  try {
+    const updated = await renameAgentSession(session.id, title)
+    const idx = sessions.value.findIndex((item) => item.id === session.id)
+    if (idx >= 0) sessions.value[idx] = updated
+    ElMessage.success('已重命名')
+  } catch (e) {
+    ElMessage.error(errorMessage(e, '重命名失败'))
+  }
+}
+
+async function handleDelete(session: ChatSession) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除会话「${session.title || '新会话'}」吗？会话内的对话记录将一并清除。`,
+      '删除会话',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await deleteAgentSession(session.id)
+    sessions.value = sessions.value.filter((item) => item.id !== session.id)
+    if (activeSessionId.value === session.id) {
+      activeSessionId.value = sessions.value[0]?.id ?? null
+      turns.value = []
+      if (activeSessionId.value !== null) await loadMessages(activeSessionId.value)
+    }
+    ElMessage.success('会话已删除')
+  } catch (e) {
+    ElMessage.error(errorMessage(e, '删除失败'))
+  }
+}
+
 /** 首次进入时若无会话则自动建一个，保证可直接对话 */
 async function ensureSession(): Promise<number | null> {
   if (activeSessionId.value !== null) return activeSessionId.value
@@ -796,14 +861,24 @@ onMounted(async () => {
 }
 
 .conv {
-  width: 100%;
-  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   border: 1px solid transparent;
-  background: transparent;
   border-radius: 9px;
-  padding: 9px 10px;
+  padding: 4px 6px 4px 0;
   margin-bottom: 3px;
   transition: 0.15s;
+}
+
+.conv-main {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  border-radius: 9px;
+  padding: 5px 6px 5px 10px;
 }
 
 .conv:hover {
@@ -815,7 +890,7 @@ onMounted(async () => {
   border-color: #bfeae4;
 }
 
-.conv b {
+.conv-main b {
   display: block;
   font-size: 12.5px;
   font-weight: 600;
@@ -825,9 +900,49 @@ onMounted(async () => {
   text-overflow: ellipsis;
 }
 
-.conv span {
+.conv-main > span {
   font-size: 11px;
   color: var(--muted);
+}
+
+.conv-acts {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: 0.15s;
+}
+
+.conv:hover .conv-acts,
+.conv.is-active .conv-acts {
+  opacity: 1;
+}
+
+.conv-acts .act {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  transition: 0.15s;
+}
+
+.conv-acts .act svg {
+  width: 14px;
+  height: 14px;
+}
+
+.conv-acts .act:hover {
+  background: var(--surface);
+  color: var(--brand-600);
+}
+
+.conv-acts .act.danger:hover {
+  color: #dc2626;
 }
 
 .conv-hint {

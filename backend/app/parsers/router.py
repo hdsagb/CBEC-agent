@@ -236,9 +236,25 @@ def read_text(file_path: str, file_type: str) -> str:
                     if row and any(c is not None for c in row):
                         lines.append(" | ".join(_str(c) for c in row))
             return "\n".join(lines)
+        if file_type in IMAGE_TYPES:
+            return ocr_text(file_path)
     except Exception:
         return ""
     return ""
+
+
+def _items_from_json(data: object) -> list[dict] | None:
+    """把 LLM 返回的 {"items": [...]} 规整为标准化行；结构不合法返回 None。"""
+    if not isinstance(data, dict):
+        return None
+    items = data.get("items")
+    if not isinstance(items, list):
+        return None
+    out: list[dict] = []
+    for item in items:
+        if isinstance(item, dict):
+            out.append(_coerce(item))
+    return out or None
 
 
 def llm_extract(raw_text: str) -> list[dict] | None:
@@ -259,16 +275,159 @@ def llm_extract(raw_text: str) -> list[dict] | None:
         data = json.loads(resp.get("content") or "{}")
     except Exception:
         return None
+    return _items_from_json(data)
 
-    items = data.get("items")
-    if not isinstance(items, list):
+
+# ---------------- 图片报价单：多模态 LLM 优先，本地 OCR 兜底 ----------------
+
+IMAGE_TYPES = ("png", "jpg", "jpeg")
+
+_IMAGE_MIME = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg"}
+
+IMAGE_PROMPT = "请识别这张报价单图片，抽取其中的报价明细并结构化输出。"
+
+
+def image_data_url(file_path: str, file_type: str) -> str:
+    """把图片读成 base64 data URL，供多模态模型使用。"""
+    import base64
+
+    mime = _IMAGE_MIME.get(file_type.lower().lstrip("."), "image/png")
+    with open(file_path, "rb") as fh:
+        payload = base64.b64encode(fh.read()).decode("ascii")
+    return f"data:{mime};base64,{payload}"
+
+
+def llm_extract_image(file_path: str, file_type: str) -> list[dict] | None:
+    """多模态 LLM 抽取图片报价单；未配置视觉模型或调用失败时返回 None。"""
+    try:
+        from app.services.llm.base import get_vision_client
+
+        client = get_vision_client()
+        if client is None:
+            return None
+        resp = client.chat(
+            [
+                {"role": "system", "content": EXTRACTION_PROMPT},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": IMAGE_PROMPT},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": image_data_url(file_path, file_type)},
+                        },
+                    ],
+                },
+            ],
+            json_mode=True,
+        )
+        data = json.loads(resp.get("content") or "{}")
+    except Exception:
         return None
-    out: list[dict] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        out.append(_coerce(item))
-    return out or None
+    return _items_from_json(data)
+
+
+_OCR_ENGINE = None
+_OCR_UNAVAILABLE = False
+
+
+def _get_ocr_engine():
+    """懒加载 RapidOCR 引擎；OCR 关闭、依赖缺失或初始化失败时返回 None。"""
+    global _OCR_ENGINE, _OCR_UNAVAILABLE
+    if _OCR_ENGINE is not None or _OCR_UNAVAILABLE:
+        return _OCR_ENGINE
+    from app.core.config import settings
+
+    if not settings.ocr_enabled:
+        _OCR_UNAVAILABLE = True
+        return None
+    try:
+        from rapidocr import RapidOCR
+
+        _OCR_ENGINE = RapidOCR()
+    except Exception:
+        _OCR_UNAVAILABLE = True
+    return _OCR_ENGINE
+
+
+def _box_to_line(box: object, text: object) -> tuple[float, float, str]:
+    """把 OCR 文字框转成 (纵向中心 y, 最左 x, 文本)。"""
+    try:
+        ys = [float(p[1]) for p in box]  # type: ignore[index]
+        xs = [float(p[0]) for p in box]  # type: ignore[index]
+        return (sum(ys) / len(ys), min(xs), str(text))
+    except Exception:
+        return (0.0, 0.0, str(text))
+
+
+def ocr_lines(file_path: str) -> list[tuple[float, float, str]]:
+    """本地 OCR：返回 (y_center, x_left, text)；引擎不可用时返回空列表。"""
+    engine = _get_ocr_engine()
+    if engine is None:
+        return []
+    try:
+        raw = engine(file_path)
+    except Exception:
+        return []
+
+    lines: list[tuple[float, float, str]] = []
+    # rapidocr 2.x：返回带 boxes / txts 属性的结果对象
+    boxes = getattr(raw, "boxes", None)
+    txts = getattr(raw, "txts", None)
+    if boxes is not None and txts is not None:
+        for box, text in zip(boxes, txts):
+            lines.append(_box_to_line(box, text))
+        return lines
+
+    # rapidocr_onnxruntime 1.x：返回 ([[box, text, score], ...], elapse)
+    data = raw[0] if isinstance(raw, tuple) and raw else raw
+    if isinstance(data, (list, tuple)):
+        for entry in data:
+            if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                lines.append(_box_to_line(entry[0], entry[1]))
+    return lines
+
+
+def ocr_text(file_path: str) -> str:
+    """本地 OCR 文本（按纵向、横向排序），供 read_text 复用。"""
+    lines = ocr_lines(file_path)
+    return "\n".join(text for _, _, text in sorted(lines, key=lambda t: (t[0], t[1])))
+
+
+def _matrix_from_ocr(lines: list[tuple[float, float, str]]) -> list[list[str]]:
+    """把 OCR 文字框按 y 聚类成行、行内按 x 排序，重建表格矩阵。"""
+    if not lines:
+        return []
+    ordered = sorted(lines, key=lambda t: (t[0], t[1]))
+    gaps = sorted(
+        ordered[i + 1][0] - ordered[i][0]
+        for i in range(len(ordered) - 1)
+        if ordered[i + 1][0] - ordered[i][0] > 0.5
+    )
+    tol = (gaps[len(gaps) // 2] if gaps else 12.0) * 0.7
+
+    matrix: list[list[str]] = []
+    current: list[tuple[float, str]] = []
+    base_y = ordered[0][0]
+    for y, x, text in ordered:
+        if current and abs(y - base_y) > tol:
+            matrix.append([t for _, t in sorted(current)])
+            current = []
+        if not current:
+            base_y = y
+        current.append((x, text))
+    if current:
+        matrix.append([t for _, t in sorted(current)])
+    return matrix
+
+
+def extract_image(file_path: str, file_type: str) -> tuple[list[dict], float]:
+    """图片报价单识别：多模态 LLM → 本地 OCR 文本 → 表头映射。"""
+    rows = llm_extract_image(file_path, file_type)
+    if rows:
+        return rows, 0.8
+    rows = rows_from_matrix(_matrix_from_ocr(ocr_lines(file_path)))
+    return rows, 0.6
 
 
 def row_confidence(base: float, rec: dict) -> float:

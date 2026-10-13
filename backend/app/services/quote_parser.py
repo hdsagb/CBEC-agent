@@ -49,6 +49,9 @@ def parse_source(source: QuoteSource, db: Session) -> list[QuoteItem]:
             rows, base_conf = parsers.extract_word(path)
         else:
             rows, base_conf = parsers.extract_pdf(path)
+    elif file_type in ("png", "jpg", "jpeg"):
+        # 图片报价单：多模态 LLM 优先，本地 OCR 兜底
+        rows, base_conf = parsers.extract_image(path, file_type)
     else:
         rows, base_conf = [], 0.0
 

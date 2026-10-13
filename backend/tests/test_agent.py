@@ -265,6 +265,66 @@ def test_g13_history_persisted_for_reload(client, users, session_id, patch_llm):
     assert rows[0]["content"] == "问"
 
 
+# ---------------- I 组：会话管理（重命名 / 删除）----------------
+
+def test_i1_rename_session(client, users, session_id):
+    resp = client.patch(
+        f"/api/agent/sessions/{session_id}",
+        json={"title": "  蓝牙耳机报价  "},
+        headers=_headers(users),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["title"] == "蓝牙耳机报价"
+    # 列表接口同步反映新标题
+    listed = client.get("/api/agent/sessions", headers=_headers(users)).json()
+    assert listed[0]["title"] == "蓝牙耳机报价"
+
+
+def test_i2_rename_rejects_blank_title(client, users, session_id):
+    resp = client.patch(
+        f"/api/agent/sessions/{session_id}",
+        json={"title": "   "},
+        headers=_headers(users),
+    )
+    assert resp.status_code == 400
+
+
+def test_i3_rename_rejects_foreign_session(client, users):
+    other = client.post("/api/agent/sessions", headers=users["customs"]["headers"]).json()["id"]
+    resp = client.patch(
+        f"/api/agent/sessions/{other}",
+        json={"title": "越权改名"},
+        headers=_headers(users),
+    )
+    assert resp.status_code == 404
+    # 原会话标题未被改动
+    listed = client.get("/api/agent/sessions", headers=users["customs"]["headers"]).json()
+    assert listed[0]["title"] == "新会话"
+
+
+def test_i4_delete_session_removes_messages(client, users, session_id, patch_llm):
+    patch_llm([_text("答复")])
+    _chat(client, users, "问一句", session_id)
+    assert len(client.get(f"/api/agent/sessions/{session_id}/messages", headers=_headers(users)).json()) == 2
+
+    resp = client.delete(f"/api/agent/sessions/{session_id}", headers=_headers(users))
+    assert resp.status_code == 204
+    # 会话与消息一并消失
+    assert client.get("/api/agent/sessions", headers=_headers(users)).json() == []
+    assert client.get(f"/api/agent/sessions/{session_id}/messages", headers=_headers(users)).status_code == 404
+
+
+def test_i5_delete_rejects_foreign_session(client, users):
+    other = client.post("/api/agent/sessions", headers=users["customs"]["headers"]).json()["id"]
+    assert client.delete(f"/api/agent/sessions/{other}", headers=_headers(users)).status_code == 404
+    assert len(client.get("/api/agent/sessions", headers=users["customs"]["headers"]).json()) == 1
+
+
+def test_i6_session_mutation_requires_auth(client, users, session_id):
+    assert client.patch(f"/api/agent/sessions/{session_id}", json={"title": "x"}).status_code == 401
+    assert client.delete(f"/api/agent/sessions/{session_id}").status_code == 401
+
+
 # ---------------- H 组：工具集扩展（导出箱唛 / 批量导入要素 / 查询比价批次）----------------
 
 MARK_LAYOUT = {"title": "SHIPPING MARK", "rows": ["品名"], "footer": "MADE IN CHINA"}

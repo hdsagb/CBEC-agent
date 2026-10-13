@@ -7,7 +7,14 @@ from app.api.deps import get_current_user
 from app.db import get_db
 from app.models.chat import ChatMessage, ChatSession
 from app.models.user import User
-from app.schemas.chat import ChatMessageIn, ChatMessageOut, ChatSessionOut, ToolCall, ToolResult
+from app.schemas.chat import (
+    ChatMessageIn,
+    ChatMessageOut,
+    ChatSessionOut,
+    ChatSessionUpdate,
+    ToolCall,
+    ToolResult,
+)
 from app.services.agent import AGENT_TOOLS, run_agent_turn
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
@@ -36,6 +43,41 @@ def list_sessions(
     user: User = Depends(get_current_user),
 ) -> list[ChatSession]:
     return db.query(ChatSession).filter(ChatSession.user_id == user.id).all()
+
+
+@router.patch("/sessions/{session_id}", response_model=ChatSessionOut)
+def rename_session(
+    session_id: int,
+    req: ChatSessionUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> ChatSession:
+    """重命名会话：仅会话所有者可操作，空名称直接拒绝。"""
+    session = db.get(ChatSession, session_id)
+    if session is None or session.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "会话不存在")
+    title = req.title.strip()
+    if not title:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "会话名称不能为空")
+    session.title = title[:128]
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+@router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_session(
+    session_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> None:
+    """删除会话：级联清理该会话下的全部消息，避免残留孤儿记录。"""
+    session = db.get(ChatSession, session_id)
+    if session is None or session.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "会话不存在")
+    db.query(ChatMessage).filter(ChatMessage.session_id == session_id).delete()
+    db.delete(session)
+    db.commit()
 
 
 @router.get("/sessions/{session_id}/messages", response_model=list[ChatMessageOut])

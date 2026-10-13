@@ -20,6 +20,15 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
 
+    # 多模态（图片报价单识别）：llm_vision_model 留空表示不启用，
+    # 图片解析回退到本地 OCR。base_url / api_key 留空时复用 DeepSeek 配置。
+    llm_vision_model: str = ""
+    llm_vision_base_url: str = ""
+    llm_vision_api_key: str = ""
+
+    # 本地 OCR 兜底（RapidOCR）：依赖缺失时自动跳过
+    ocr_enabled: bool = True
+
     # 上传文件存储目录
     upload_dir: str = "./uploads"
 

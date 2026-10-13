@@ -32,3 +32,7 @@ class ChatSessionOut(BaseModel):
     title: str
 
     model_config = {"from_attributes": True}
+
+
+class ChatSessionUpdate(BaseModel):
+    title: str

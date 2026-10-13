@@ -45,7 +45,7 @@
         >
           <div class="el-upload__text">拖拽报价文件到此处，或<em>点击选择</em></div>
           <template #tip>
-            <div class="el-upload__tip">支持 Excel / Word / PDF，一家供应商一份文件（文件名默认作为供应商名）</div>
+            <div class="el-upload__tip">支持 Excel / Word / PDF / 图片（png、jpg），一家供应商一份文件（文件名默认作为供应商名）</div>
           </template>
         </el-upload>
         <div class="upload-actions">
@@ -272,7 +272,7 @@ import {
   type QuoteItem,
 } from '@/api/quotes'
 
-const ACCEPT = '.xlsx,.xls,.docx,.pdf'
+const ACCEPT = '.xlsx,.xls,.docx,.pdf,.png,.jpg,.jpeg'
 const CURRENCIES = ['CNY', 'USD', 'EUR', 'GBP']
 const DIMENSIONS = [
   { key: 'price', label: '价格' },

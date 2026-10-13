@@ -38,6 +38,14 @@ export function fetchAgentSessions() {
   return http.get<ChatSession[]>('/agent/sessions')
 }
 
+export function renameAgentSession(sessionId: number, title: string) {
+  return http.patch<ChatSession>(`/agent/sessions/${sessionId}`, { title })
+}
+
+export function deleteAgentSession(sessionId: number) {
+  return http.delete<void>(`/agent/sessions/${sessionId}`)
+}
+
 export function fetchAgentMessages(sessionId: number) {
   return http.get<ChatMessage[]>(`/agent/sessions/${sessionId}/messages`)
 }
