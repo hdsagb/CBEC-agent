@@ -9,8 +9,15 @@ from app.core.config import settings
 from app.db import get_db
 from app.models.quote import QuoteBatch, QuoteItem, QuoteSource
 from app.models.user import User
+from app.schemas.price_reference import (
+    BatchPriceCheckItem,
+    BatchPriceCheckRequest,
+    BatchPriceCheckResult,
+    PriceCheckRequest,
+    PriceCheckResult,
+)
 from app.schemas.quote import CompareRequest, QuoteBatchOut, QuoteItemConfirm, QuoteItemOut
-from app.services import comparison, quote_parser
+from app.services import comparison, price_reference, quote_parser
 
 router = APIRouter(prefix="/api/quotes", tags=["quotes"])
 
@@ -189,3 +196,100 @@ def compare_batch(
     if batch is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "批次不存在")
     return comparison.compare_batch(db, batch_id, req.weight_config)
+
+
+def _price_check_row(
+    db: Session,
+    item: QuoteItem,
+    source: QuoteSource | None,
+    tolerance: float,
+    only_confirmed: bool,
+    exclude_batch_id: int | None,
+) -> dict:
+    """把单条明细的历史价格校验结果整理为批次校验表格行。"""
+    result = price_reference.check_price(
+        db,
+        product_name=item.product_name,
+        unit_price=item.unit_price,
+        currency=item.currency,
+        tolerance=tolerance,
+        only_confirmed=only_confirmed,
+        exclude_batch_id=exclude_batch_id,
+    )
+    supplier = (source.supplier_name or "").strip() if source else ""
+    return {
+        "item_id": item.id,
+        "supplier_name": supplier or "未命名供应商",
+        "product_name": item.product_name,
+        "spec": item.spec,
+        "unit_price": item.unit_price,
+        "currency": item.currency,
+        "verdict": result["verdict"],
+        "deviation_rate": result["deviation_rate"],
+        "reference_avg": result["reference_avg"],
+        "sample_count": result["sample_count"],
+        "match_by": result["match_by"],
+        "message": result["message"],
+    }
+
+
+@router.post("/items/{item_id}/price-check", response_model=PriceCheckResult)
+def check_item_price(
+    item_id: int,
+    req: PriceCheckRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> PriceCheckResult:
+    """单条报价的合理性校验：与同币种历史均价比较（排除本批次自身样本）。"""
+    item = db.get(QuoteItem, item_id)
+    if item is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "明细不存在")
+    source = db.get(QuoteSource, item.source_id)
+    unit_price = req.unit_price if req.unit_price is not None else item.unit_price
+    result = price_reference.check_price(
+        db,
+        product_name=req.product_name or item.product_name,
+        hs_code=req.hs_code,
+        unit_price=unit_price,
+        currency=req.currency or item.currency,
+        tolerance=req.tolerance,
+        only_confirmed=req.only_confirmed,
+        exclude_batch_id=source.batch_id if source else None,
+    )
+    return PriceCheckResult(**result)
+
+
+@router.post("/batches/{batch_id}/price-check", response_model=BatchPriceCheckResult)
+def check_batch_prices(
+    batch_id: int,
+    req: BatchPriceCheckRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> BatchPriceCheckResult:
+    """批次级价格校验：逐条关联历史成交价，汇总偏低/合理/偏高/无参考数量。"""
+    batch = db.get(QuoteBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "批次不存在")
+    rows = (
+        db.query(QuoteItem, QuoteSource)
+        .join(QuoteSource, QuoteItem.source_id == QuoteSource.id)
+        .filter(QuoteSource.batch_id == batch_id)
+        .order_by(QuoteItem.id)
+        .all()
+    )
+    counts = {"low": 0, "normal": 0, "high": 0, "no_reference": 0}
+    items: list[BatchPriceCheckItem] = []
+    for item, source in rows:
+        row = _price_check_row(db, item, source, req.tolerance, req.only_confirmed, batch_id)
+        counts[row["verdict"]] = counts.get(row["verdict"], 0) + 1
+        items.append(BatchPriceCheckItem(**row))
+    return BatchPriceCheckResult(
+        batch_id=batch_id,
+        tolerance=req.tolerance,
+        total=len(rows),
+        low=counts["low"],
+        normal=counts["normal"],
+        high=counts["high"],
+        no_reference=counts["no_reference"],
+        items=items,
+    )

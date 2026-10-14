@@ -18,7 +18,8 @@ from app.schemas.element import (
     ElementPage,
     ElementUpdate,
 )
-from app.services import element_excel, element_import
+from app.schemas.price_reference import PriceReference
+from app.services import element_excel, element_import, price_reference
 
 router = APIRouter(prefix="/api/elements", tags=["elements"])
 
@@ -204,6 +205,27 @@ def get_declaration_text(
     if element is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "要素记录不存在")
     return DeclarationText(text=_build_declaration_text(element))
+
+
+@router.get("/{element_id}/price-reference", response_model=PriceReference)
+def get_price_reference(
+    element_id: int,
+    only_confirmed: bool = Query(True, description="是否仅取已确认的历史报价"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> PriceReference:
+    """按该要素的 HS 编码／商品名关联历史成交价，用于报价合理性参考。"""
+    element = db.get(DeclarationElement, element_id)
+    if element is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "要素记录不存在")
+    return PriceReference(
+        **price_reference.price_reference(
+            db,
+            hs_code=element.hs_code,
+            product_name=element.product_name,
+            only_confirmed=only_confirmed,
+        )
+    )
 
 
 @router.post("", response_model=ElementOut)

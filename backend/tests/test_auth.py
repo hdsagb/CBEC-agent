@@ -1,19 +1,23 @@
-"""B 组用例：认证（注册 / 登录 / JWT 校验 / 停用账号）。"""
+"""B 组用例：认证（注册 / 登录 / JWT 校验 / 停用账号 / 启动安全自检）。"""
+import pytest
+
+from app.core.config import Settings
 from app.db import SessionLocal
 from app.models.user import User
 
 PASSWORD = "test12345"
 
 
-def test_b1_register_three_roles(client):
+def test_b1_register_ignores_client_role(client):
+    """SEC-01 回归：注册接口不接受客户端指定角色，传 role=admin 也只落为 merchandiser。"""
     resp = client.post(
         "/api/auth/register",
-        json={"username": "b1_admin", "password": PASSWORD, "display_name": "管理员", "role": "admin"},
+        json={"username": "b1_user", "password": PASSWORD, "display_name": "普通用户", "role": "admin"},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["username"] == "b1_admin"
-    assert body["role"] == "admin"
+    assert body["username"] == "b1_user"
+    assert body["role"] == "merchandiser"
     assert body["status"] == "active"
 
 
@@ -77,3 +81,35 @@ def test_b7_disabled_user_blocked(client, register_user, login_user):
     resp = client.get("/api/auth/me", headers=old_headers)
     assert resp.status_code == 401
     assert "不可用" in resp.json()["detail"]
+
+
+def test_b8_register_cannot_grant_privileges(client, login_user):
+    """SEC-01 回归：注册提权被封死后，特权接口对自助注册账号一律 403。"""
+    resp = client.post(
+        "/api/auth/register",
+        json={"username": "b8_escalate", "password": PASSWORD, "role": "admin"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["role"] == "merchandiser"
+
+    headers = {"Authorization": f"Bearer {login_user('b8_escalate')['access_token']}"}
+    assert client.get("/api/auth/me", headers=headers).json()["role"] == "merchandiser"
+    # 导入模板属 customs 及以上专属，普通注册账号应被拦截
+    gated = client.get("/api/elements/template", headers=headers)
+    assert gated.status_code == 403
+    assert gated.json()["detail"] == "权限不足"
+
+
+@pytest.mark.parametrize(
+    "weak",
+    ["", "change-me-to-a-random-long-string", "dev-secret-change-me", "secret", "abc123"],
+)
+def test_b9_insecure_jwt_secret_rejected(weak):
+    """SEC-02 回归：空值、示例值与过短的 JWT_SECRET 在启动自检阶段被拒绝。"""
+    with pytest.raises(RuntimeError):
+        Settings(jwt_secret=weak).validate_security()
+
+
+def test_b10_strong_jwt_secret_accepted():
+    """SEC-02 回归：足够长的随机密钥可通过启动自检。"""
+    Settings(jwt_secret="a" * 32).validate_security()

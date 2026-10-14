@@ -85,12 +85,29 @@
         </svg>
         <span class="txt">智能比价</span>
       </RouterLink>
+      <RouterLink :to="{ name: 'suppliers' }" class="nav-item" active-class="is-active">
+        <svg viewBox="0 0 24 24" fill="none">
+          <path d="M3 17V7h11v10" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
+          <path d="M14 10h4l3 3v4h-7" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
+          <circle cx="7" cy="18" r="1.8" stroke="currentColor" stroke-width="1.7" />
+          <circle cx="17" cy="18" r="1.8" stroke="currentColor" stroke-width="1.7" />
+        </svg>
+        <span class="txt">供应商库</span>
+      </RouterLink>
       <RouterLink :to="{ name: 'marks' }" class="nav-item" active-class="is-active">
         <svg viewBox="0 0 24 24" fill="none">
           <rect x="3" y="4" width="18" height="16" rx="2" stroke="currentColor" stroke-width="1.7" />
           <path d="M3 9h18M7 13h4M7 16h7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
         </svg>
         <span class="txt">箱唛生成</span>
+      </RouterLink>
+      <RouterLink :to="{ name: 'reports' }" class="nav-item" active-class="is-active">
+        <svg viewBox="0 0 24 24" fill="none">
+          <path d="M3 21h18" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+          <path d="M6 21V11l5-3.4V21" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
+          <path d="M13 21V4l5 3.4V21" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
+        </svg>
+        <span class="txt">数据分析</span>
       </RouterLink>
 
       <template v-if="isAdmin">

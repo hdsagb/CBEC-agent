@@ -7,10 +7,16 @@ class LoginRequest(BaseModel):
 
 
 class RegisterRequest(BaseModel):
+    """自助注册请求。
+
+    不接收 role：注册接口只能创建 merchandiser 账号，
+    admin / customs 需通过运维脚本 app.scripts.create_user 预置，
+    避免任何人自助提权。
+    """
+
     username: str
     password: str
     display_name: str = ""
-    role: str = "merchandiser"
 
 
 class UserOut(BaseModel):

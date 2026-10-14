@@ -12,13 +12,18 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 @router.post("/register", response_model=UserOut)
 def register(req: RegisterRequest, db: Session = Depends(get_db)) -> User:
+    """自助注册：角色固定为 merchandiser，不接受客户端指定角色。
+
+    提权路径被封死后，admin / customs 账号由运维脚本预置
+    （见 app/scripts/create_user.py）。
+    """
     if db.query(User).filter(User.username == req.username).first():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "用户名已存在")
     user = User(
         username=req.username,
         password_hash=hash_password(req.password),
         display_name=req.display_name or req.username,
-        role=req.role,
+        role="merchandiser",
     )
     db.add(user)
     db.commit()

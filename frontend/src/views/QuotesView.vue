@@ -140,8 +140,9 @@
               <el-tag v-else type="info" size="small" effect="light">待确认</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="90" align="center" fixed="right">
+          <el-table-column label="操作" width="140" align="center" fixed="right">
             <template #default="{ row }">
+              <el-button link type="primary" @click="handleCheckRow(row)">校验</el-button>
               <el-button v-if="!row.confirmed" link type="primary" @click="handleConfirmOne(row)">确认</el-button>
               <span v-else class="muted">—</span>
             </template>
@@ -154,14 +155,24 @@
         <template #header>
           <div class="card-header">
             <span class="card-title">3. 权重配置与比价</span>
-            <el-button
-              type="primary"
-              :loading="comparing"
-              :disabled="!confirmedCount"
-              @click="handleCompare"
-            >
-              开始比价
-            </el-button>
+            <div>
+              <el-button
+                type="warning"
+                plain
+                :disabled="!items.length"
+                @click="handleCheckBatch"
+              >
+                批次价格校验
+              </el-button>
+              <el-button
+                type="primary"
+                :loading="comparing"
+                :disabled="!confirmedCount"
+                @click="handleCompare"
+              >
+                开始比价
+              </el-button>
+            </div>
           </div>
         </template>
 
@@ -248,6 +259,49 @@
         <el-button type="primary" :loading="creatingBatch" @click="handleCreateBatch">创建</el-button>
       </template>
     </el-dialog>
+
+    <!-- 价格校验（历史成交价联动） -->
+    <el-dialog v-model="priceCheckVisible" :title="priceCheckTitle" width="880px">
+      <div v-if="priceCheckSummary" class="verdict-summary">
+        <el-tag type="warning" effect="light">偏低 {{ priceCheckSummary.low }}</el-tag>
+        <el-tag type="success" effect="light">合理 {{ priceCheckSummary.normal }}</el-tag>
+        <el-tag type="danger" effect="light">偏高 {{ priceCheckSummary.high }}</el-tag>
+        <el-tag type="info" effect="light">无参考 {{ priceCheckSummary.no_reference }}</el-tag>
+        <span class="muted">容差 ±{{ Math.round(priceCheckSummary.tolerance * 100) }}%</span>
+      </div>
+      <el-table
+        v-loading="priceCheckLoading"
+        :data="priceCheckRows"
+        border
+        size="small"
+        empty-text="暂无校验数据"
+      >
+        <el-table-column prop="supplier_name" label="供应商" width="120" show-overflow-tooltip />
+        <el-table-column prop="product_name" label="产品名称" min-width="140" show-overflow-tooltip />
+        <el-table-column label="单价" width="110" align="right">
+          <template #default="{ row }">
+            {{ row.unit_price === null ? '-' : `${row.currency} ${row.unit_price}` }}
+          </template>
+        </el-table-column>
+        <el-table-column label="判定" width="90" align="center">
+          <template #default="{ row }">
+            <el-tag :type="verdictTag(row.verdict)" size="small" effect="light">{{ verdictText(row.verdict) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="偏离" width="90" align="right">
+          <template #default="{ row }">
+            {{ row.deviation_rate === null ? '-' : `${(row.deviation_rate * 100).toFixed(1)}%` }}
+          </template>
+        </el-table-column>
+        <el-table-column label="参考均价" width="100" align="right">
+          <template #default="{ row }">{{ row.reference_avg === null ? '-' : row.reference_avg }}</template>
+        </el-table-column>
+        <el-table-column prop="message" label="说明" min-width="220" show-overflow-tooltip />
+      </el-table>
+      <template #footer>
+        <el-button @click="priceCheckVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
       </div>
     </div>
   </div>
@@ -271,6 +325,13 @@ import {
   type QuoteBatch,
   type QuoteItem,
 } from '@/api/quotes'
+import {
+  checkQuoteBatchPrices,
+  checkQuoteItemPrice,
+  type BatchPriceCheckItem,
+  type BatchPriceCheckResult,
+  type PriceVerdict,
+} from '@/api/priceReference'
 
 const ACCEPT = '.xlsx,.xls,.docx,.pdf,.png,.jpg,.jpeg'
 const CURRENCIES = ['CNY', 'USD', 'EUR', 'GBP']
@@ -301,6 +362,33 @@ const compareResult = ref<CompareResult | null>(null)
 const batchDialogVisible = ref(false)
 const newBatchName = ref('')
 const creatingBatch = ref(false)
+
+// 价格校验（历史成交价联动）
+const priceCheckVisible = ref(false)
+const priceCheckLoading = ref(false)
+const priceCheckTitle = ref('价格校验')
+const priceCheckRows = ref<BatchPriceCheckItem[]>([])
+const priceCheckSummary = ref<BatchPriceCheckResult | null>(null)
+
+const VERDICT_TEXT: Record<PriceVerdict, string> = {
+  low: '偏低',
+  normal: '合理',
+  high: '偏高',
+  no_reference: '无参考',
+}
+const VERDICT_TAG: Record<PriceVerdict, 'success' | 'info' | 'warning' | 'danger'> = {
+  low: 'warning',
+  normal: 'success',
+  high: 'danger',
+  no_reference: 'info',
+}
+
+function verdictText(value: PriceVerdict): string {
+  return VERDICT_TEXT[value] ?? value
+}
+function verdictTag(value: PriceVerdict): 'success' | 'info' | 'warning' | 'danger' {
+  return VERDICT_TAG[value] ?? 'info'
+}
 
 const confirmedCount = computed(() => items.value.filter((i) => i.confirmed).length)
 const unconfirmedCount = computed(() => items.value.length - confirmedCount.value)
@@ -519,6 +607,59 @@ async function handleCompare() {
   }
 }
 
+/** 单条明细：与历史成交价比较，校验报价合理性 */
+async function handleCheckRow(row: QuoteItem) {
+  priceCheckTitle.value = '价格校验'
+  priceCheckRows.value = []
+  priceCheckSummary.value = null
+  priceCheckVisible.value = true
+  priceCheckLoading.value = true
+  try {
+    const res = await checkQuoteItemPrice(row.id, {})
+    priceCheckRows.value = [
+      {
+        item_id: row.id,
+        supplier_name: sourceName(row.source_id),
+        product_name: row.product_name,
+        spec: row.spec,
+        unit_price: res.unit_price,
+        currency: res.currency,
+        verdict: res.verdict,
+        deviation_rate: res.deviation_rate,
+        reference_avg: res.reference_avg,
+        sample_count: res.sample_count,
+        match_by: res.match_by,
+        message: res.message,
+      },
+    ]
+  } catch (e) {
+    priceCheckVisible.value = false
+    ElMessage.error(errorMessage(e, '价格校验失败'))
+  } finally {
+    priceCheckLoading.value = false
+  }
+}
+
+/** 批次级：逐条与历史成交价比较并汇总判定分布 */
+async function handleCheckBatch() {
+  if (currentBatchId.value === null) return
+  priceCheckTitle.value = '批次价格校验'
+  priceCheckRows.value = []
+  priceCheckSummary.value = null
+  priceCheckVisible.value = true
+  priceCheckLoading.value = true
+  try {
+    const res = await checkQuoteBatchPrices(currentBatchId.value, {})
+    priceCheckRows.value = res.items
+    priceCheckSummary.value = res
+  } catch (e) {
+    priceCheckVisible.value = false
+    ElMessage.error(errorMessage(e, '价格校验失败'))
+  } finally {
+    priceCheckLoading.value = false
+  }
+}
+
 onMounted(async () => {
   await loadBatches()
   if (batches.value.length) {
@@ -601,6 +742,12 @@ onMounted(async () => {
 }
 .muted {
   color: var(--muted);
+}
+.verdict-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 :deep(.best-row) {
   background-color: #f0fdf9;

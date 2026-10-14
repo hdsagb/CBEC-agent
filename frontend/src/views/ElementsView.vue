@@ -112,6 +112,38 @@
           </el-descriptions-item>
         </el-descriptions>
       </template>
+
+      <div class="extra-title">历史价格参考</div>
+      <div v-loading="priceRefLoading" class="price-ref">
+        <div v-if="priceRef" class="ref-head">
+          <el-tag size="small" effect="plain">匹配方式：{{ matchByText(priceRef.match_by) }}</el-tag>
+          <span class="muted">历史样本 {{ priceRef.sample_count }} 条</span>
+        </div>
+        <template v-if="priceRef && priceRef.currency_stats.length">
+          <el-table :data="priceRef.currency_stats" size="small" border>
+            <el-table-column prop="currency" label="币种" width="70" />
+            <el-table-column label="样本" width="60" align="right">
+              <template #default="{ row }">{{ row.item_count }}</template>
+            </el-table-column>
+            <el-table-column label="均价" align="right">
+              <template #default="{ row }">{{ row.avg_price }}</template>
+            </el-table-column>
+            <el-table-column label="区间" align="right">
+              <template #default="{ row }">{{ row.min_price }} ~ {{ row.max_price }}</template>
+            </el-table-column>
+          </el-table>
+          <el-table :data="priceRef.samples" size="small" border class="sample-table">
+            <el-table-column prop="supplier_name" label="供应商" min-width="100" show-overflow-tooltip />
+            <el-table-column label="单价" width="110" align="right">
+              <template #default="{ row }">{{ row.currency }} {{ row.unit_price }}</template>
+            </el-table-column>
+            <el-table-column label="报价时间" width="150">
+              <template #default="{ row }">{{ formatTime(row.quote_time) }}</template>
+            </el-table-column>
+          </el-table>
+        </template>
+        <el-empty v-else-if="!priceRefLoading" :image-size="60" description="暂无历史参考价" />
+      </div>
     </el-drawer>
 
     <!-- 新建 / 编辑 -->
@@ -213,6 +245,7 @@ import {
   type ElementItem,
   type ElementPayload,
 } from '@/api/elements'
+import { fetchElementPriceReference, type PriceMatchBy, type PriceReference } from '@/api/priceReference'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -229,6 +262,18 @@ const query = reactive({ keyword: '', hs_code: '', customer_name: '', page: 1, p
 
 const detailVisible = ref(false)
 const detail = ref<ElementItem | null>(null)
+const priceRef = ref<PriceReference | null>(null)
+const priceRefLoading = ref(false)
+
+const MATCH_BY_TEXT: Record<PriceMatchBy, string> = {
+  product: '按商品名命中',
+  hs_code: '同 HS 编码兜底',
+  none: '无匹配',
+}
+
+function matchByText(value: PriceMatchBy): string {
+  return MATCH_BY_TEXT[value] ?? value
+}
 
 const dialogVisible = ref(false)
 const dialogMode = ref<'create' | 'edit'>('create')
@@ -324,6 +369,18 @@ function handleSizeChange() {
 function openDetail(row: ElementItem) {
   detail.value = row
   detailVisible.value = true
+  priceRef.value = null
+  priceRefLoading.value = true
+  fetchElementPriceReference(row.id)
+    .then((data) => {
+      priceRef.value = data
+    })
+    .catch((e) => {
+      ElMessage.error(errorMessage(e, '加载历史价格参考失败'))
+    })
+    .finally(() => {
+      priceRefLoading.value = false
+    })
 }
 
 function openCreate() {
@@ -558,6 +615,22 @@ onMounted(() => {
 .extra-title {
   margin: 16px 0 8px;
   font-weight: 600;
+}
+.price-ref {
+  min-height: 40px;
+}
+.ref-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.muted {
+  color: var(--muted);
+  font-size: 13px;
+}
+.sample-table {
+  margin-top: 8px;
 }
 .extra-editor {
   width: 100%;
