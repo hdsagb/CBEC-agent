@@ -1,7 +1,0 @@
-feat: 图片报价单识别与 Agent 会话管理补齐
-
-- 报价解析新增图片链路：多模态 LLM 优先、本地 RapidOCR 兜底，支持 png/jpg
-- config 增加视觉模型与 OCR 开关；LLM 适配层支持多模态消息与模型覆盖
-- Agent 会话支持重命名与删除：新增 PATCH/DELETE /api/agent/sessions/{id}，
-  删除时级联清理会话消息；前端会话列表增加悬浮操作区
-- 补测试：图片解析冒烟用例 + 会话管理 I 组用例
