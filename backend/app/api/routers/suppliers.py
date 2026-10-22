@@ -39,7 +39,8 @@ def list_suppliers(
 ) -> SupplierPage:
     q = db.query(Supplier)
     if status_filter:
-        q = q.filter(Supplier.status == status_filter)
+        # 非法状态直接报错，避免静默返回空列表让前端误以为是「没有数据」
+        q = q.filter(Supplier.status == _check_status(status_filter))
     if keyword:
         like = f"%{keyword}%"
         q = q.filter(
