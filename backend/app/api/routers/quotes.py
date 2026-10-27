@@ -170,14 +170,17 @@ def confirm_item(
     for k, v in req.model_dump().items():
         setattr(item, k, v)
     item.confirmed = True
+    # 明细确认与批次状态推进放在同一个事务里：先 flush 让计数查询看到本次修改，
+    # 再统一提交，避免两次 commit 之间失败导致「明细已确认、批次仍待确认」
+    db.flush()
+    _sync_confirmed_status(item.source_id, db)
     db.commit()
     db.refresh(item)
-    _sync_confirmed_status(item.source_id, db)
     return item
 
 
 def _sync_confirmed_status(source_id: int, db: Session) -> None:
-    """当批次内明细全部确认后，把批次状态推进到 confirmed。"""
+    """当批次内明细全部确认后，把批次状态标记为 confirmed（由调用方统一提交）。"""
     source = db.get(QuoteSource, source_id)
     if source is None:
         return
@@ -197,7 +200,6 @@ def _sync_confirmed_status(source_id: int, db: Session) -> None:
     batch = db.get(QuoteBatch, batch_id)
     if batch is not None and total > 0 and unconfirmed == 0:
         batch.status = "confirmed"
-        db.commit()
 
 
 @router.post("/batches/{batch_id}/compare")
