@@ -39,8 +39,9 @@ class DeepSeekClient(LLMClient):
             body["response_format"] = {"type": "json_object"}
 
         resp = httpx.post(
-            f"{settings.deepseek_base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {settings.deepseek_api_key}"},
+            # 用实例配置而非全局 settings：多模态视觉客户端可能指向不同 endpoint 与 Key
+            f"{self.base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {self.api_key}"},
             json=body,
             timeout=60,
         )

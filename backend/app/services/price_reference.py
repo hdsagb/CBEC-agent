@@ -7,6 +7,7 @@
 """
 
 import re
+from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy.orm import Session
@@ -64,6 +65,36 @@ def _quote_rows(
     return q.all()
 
 
+@dataclass
+class ReferencePool:
+    """一次请求内可复用的历史参考数据池。
+
+    批次级校验会对每条明细各算一次参考价，若每次都重新拉全表并归一化商品名，
+    开销是「明细数 × 历史报价数」。把历史池与商品名索引建一次即可把重复部分摊薄。
+    """
+
+    name_to_hs: dict[str, set[str]]
+    hs_to_names: dict[str, set[str]]
+    # 归一化商品名 → 该商品的全部历史报价行
+    by_name: dict[str, list[tuple[QuoteItem, QuoteSource, QuoteBatch]]]
+
+
+def build_reference_pool(
+    db: Session,
+    only_confirmed: bool = True,
+    exclude_batch_id: int | None = None,
+) -> ReferencePool:
+    """构建参考数据池：要素索引 + 历史报价按归一化商品名分组。"""
+    name_to_hs, hs_to_names = _element_index(db)
+    by_name: dict[str, list[tuple[QuoteItem, QuoteSource, QuoteBatch]]] = {}
+    for item, source, batch in _quote_rows(db, only_confirmed, exclude_batch_id):
+        key = normalize_name(item.product_name)
+        if not key:
+            continue
+        by_name.setdefault(key, []).append((item, source, batch))
+    return ReferencePool(name_to_hs=name_to_hs, hs_to_names=hs_to_names, by_name=by_name)
+
+
 def price_reference(
     db: Session,
     hs_code: str = "",
@@ -71,31 +102,34 @@ def price_reference(
     only_confirmed: bool = True,
     exclude_batch_id: int | None = None,
     sample_limit: int = DEFAULT_SAMPLE_LIMIT,
+    pool: ReferencePool | None = None,
 ) -> dict:
     """按 HS 编码 + 商品名检索历史成交价。
 
     匹配顺序：归一化商品名精确匹配（match_by=product）→ 同 HS 编码同类商品兜底
     （match_by=hs_code）→ 无参考（match_by=none）。统计按币种分组，避免跨币种平均。
+
+    批量校验时传入同一个 ``pool`` 可复用历史池与索引，避免每条明细重复全表查询。
     """
     norm_query = normalize_name(product_name)
-    name_to_hs, hs_to_names = _element_index(db)
+    if pool is None:
+        pool = build_reference_pool(db, only_confirmed, exclude_batch_id)
+    name_to_hs, hs_to_names, by_name = pool.name_to_hs, pool.hs_to_names, pool.by_name
 
     target_hs = _norm_hs(hs_code)
     if not target_hs and norm_query:
         candidates = sorted(name_to_hs.get(norm_query, set()))
         target_hs = candidates[0] if candidates else ""
 
-    rows = _quote_rows(db, only_confirmed, exclude_batch_id)
-
     matched: list[tuple[QuoteItem, QuoteSource, QuoteBatch]] = []
     match_by = "none"
     if norm_query:
-        matched = [r for r in rows if normalize_name(r[0].product_name) == norm_query]
+        matched = list(by_name.get(norm_query, []))
         if matched:
             match_by = "product"
     if not matched and target_hs:
-        names = hs_to_names.get(target_hs, set())
-        matched = [r for r in rows if normalize_name(r[0].product_name) in names]
+        for name in hs_to_names.get(target_hs, set()):
+            matched.extend(by_name.get(name, []))
         if matched:
             match_by = "hs_code"
 
@@ -158,6 +192,7 @@ def check_price(
     tolerance: float = DEFAULT_TOLERANCE,
     only_confirmed: bool = True,
     exclude_batch_id: int | None = None,
+    pool: ReferencePool | None = None,
 ) -> dict:
     """单条报价的合理性校验：与同币种历史均价比较，给出偏低/合理/偏高判定。"""
     ref = price_reference(
@@ -166,6 +201,7 @@ def check_price(
         product_name=product_name,
         only_confirmed=only_confirmed,
         exclude_batch_id=exclude_batch_id,
+        pool=pool,
     )
     cur = (currency or DEFAULT_CURRENCY).strip() or DEFAULT_CURRENCY
     stat = next((s for s in ref["currency_stats"] if s["currency"] == cur), None)

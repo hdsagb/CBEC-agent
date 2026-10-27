@@ -22,6 +22,8 @@ from app.services import comparison, price_reference, quote_parser
 router = APIRouter(prefix="/api/quotes", tags=["quotes"])
 
 ALLOWED_TYPES = {".xlsx", ".xls", ".docx", ".pdf", ".png", ".jpg", ".jpeg"}
+# 单个报价单上限：图片报价单最大，其余格式远小于此值
+MAX_SOURCE_BYTES = 20 * 1024 * 1024
 
 
 @router.post("/batches", response_model=QuoteBatchOut)
@@ -71,11 +73,25 @@ async def upload_source(
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in ALLOWED_TYPES:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"不支持的文件类型: {ext}")
+    # 先按声明的大小拦一次，避免把超大文件整体读进内存
+    if file.size is not None and file.size > MAX_SOURCE_BYTES:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"报价单不能超过 {MAX_SOURCE_BYTES // 1024 // 1024}MB",
+        )
 
     os.makedirs(settings.upload_dir, exist_ok=True)
     saved_name = f"{uuid.uuid4().hex}{ext}"
     saved_path = os.path.join(settings.upload_dir, saved_name)
     content = await file.read()
+    # 声明大小可能缺失或被伪造成小值，读入后再校验一次
+    if len(content) > MAX_SOURCE_BYTES:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"报价单不能超过 {MAX_SOURCE_BYTES // 1024 // 1024}MB",
+        )
+    if not content:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "报价单内容为空")
     with open(saved_path, "wb") as f:
         f.write(content)
 
@@ -205,6 +221,7 @@ def _price_check_row(
     tolerance: float,
     only_confirmed: bool,
     exclude_batch_id: int | None,
+    pool: price_reference.ReferencePool | None = None,
 ) -> dict:
     """把单条明细的历史价格校验结果整理为批次校验表格行。"""
     result = price_reference.check_price(
@@ -215,6 +232,7 @@ def _price_check_row(
         tolerance=tolerance,
         only_confirmed=only_confirmed,
         exclude_batch_id=exclude_batch_id,
+        pool=pool,
     )
     supplier = (source.supplier_name or "").strip() if source else ""
     return {
@@ -278,9 +296,15 @@ def check_batch_prices(
         .all()
     )
     counts = {"low": 0, "normal": 0, "high": 0, "no_reference": 0}
+    # 历史价格池与要素索引只建一次，供全部明细复用（原实现每条明细各查一次全表）
+    pool = price_reference.build_reference_pool(
+        db, only_confirmed=req.only_confirmed, exclude_batch_id=batch_id
+    )
     items: list[BatchPriceCheckItem] = []
     for item, source in rows:
-        row = _price_check_row(db, item, source, req.tolerance, req.only_confirmed, batch_id)
+        row = _price_check_row(
+            db, item, source, req.tolerance, req.only_confirmed, batch_id, pool=pool
+        )
         counts[row["verdict"]] = counts.get(row["verdict"], 0) + 1
         items.append(BatchPriceCheckItem(**row))
     return BatchPriceCheckResult(
