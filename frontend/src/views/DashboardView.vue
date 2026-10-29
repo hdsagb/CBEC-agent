@@ -112,13 +112,16 @@ async function load() {
   loading.value = true
   const [elements, batches, jobs] = await Promise.allSettled([
     fetchElements({ page: 1, page_size: 1 }),
-    fetchQuoteBatches(),
+    // 首页只统计最近一页批次（上限 100），避免为看板拉取全部数据
+    fetchQuoteBatches({ page: 1, page_size: 100 }),
     fetchMarkJobs(),
   ])
 
   elementTotal.value = elements.status === 'fulfilled' ? elements.value.total : null
   activeBatchCount.value =
-    batches.status === 'fulfilled' ? batches.value.filter((b) => b.status !== 'compared').length : null
+    batches.status === 'fulfilled'
+      ? batches.value.items.filter((b) => b.status !== 'compared').length
+      : null
   markJobCount.value = jobs.status === 'fulfilled' ? jobs.value.length : null
   loading.value = false
 }

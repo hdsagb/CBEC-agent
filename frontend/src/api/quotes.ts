@@ -19,6 +19,13 @@ export interface QuoteBatch {
   sources: QuoteSource[]
 }
 
+export interface QuoteBatchPage {
+  items: QuoteBatch[]
+  total: number
+  page: number
+  page_size: number
+}
+
 export interface QuoteItem {
   id: number
   source_id: number
@@ -82,8 +89,8 @@ export function createQuoteBatch(name: string) {
   return http.post<QuoteBatch>('/quotes/batches', undefined, { params: { name } })
 }
 
-export function fetchQuoteBatches() {
-  return http.get<QuoteBatch[]>('/quotes/batches')
+export function fetchQuoteBatches(params: { page?: number; page_size?: number } = {}) {
+  return http.get<QuoteBatchPage>('/quotes/batches', { params })
 }
 
 export function fetchQuoteBatch(id: number) {

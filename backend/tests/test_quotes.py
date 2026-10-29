@@ -223,3 +223,40 @@ def test_e9_unsupported_file_type_rejected(client, users, batch_id):
 def test_e10_requires_auth(client, batch_id):
     assert client.post("/api/quotes/batches", params={"name": "x"}).status_code == 401
     assert client.get(f"/api/quotes/batches/{batch_id}").status_code == 401
+
+
+def test_e11_batch_list_pagination(client, users):
+    """批次列表按创建时间倒序分页，翻页结果不重叠且 total 为全量条数。"""
+    headers = users["merchandiser"]["headers"]
+    created = []
+    for i in range(5):
+        resp = client.post(
+            "/api/quotes/batches", params={"name": f"分页批次{i}"}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        created.append(resp.json()["id"])
+
+    first = client.get(
+        "/api/quotes/batches", params={"page": 1, "page_size": 2}, headers=headers
+    ).json()
+    assert first["total"] == 5
+    assert first["page"] == 1 and first["page_size"] == 2
+    # 最新创建的批次排在第一页最前
+    assert [b["id"] for b in first["items"]] == [created[-1], created[-2]]
+
+    second = client.get(
+        "/api/quotes/batches", params={"page": 2, "page_size": 2}, headers=headers
+    ).json()
+    assert [b["id"] for b in second["items"]] == [created[-3], created[-4]]
+
+    third = client.get(
+        "/api/quotes/batches", params={"page": 3, "page_size": 2}, headers=headers
+    ).json()
+    assert [b["id"] for b in third["items"]] == [created[0]]
+
+    assert client.get(
+        "/api/quotes/batches", params={"page": 0}, headers=headers
+    ).status_code == 422
+    assert client.get(
+        "/api/quotes/batches", params={"page_size": 101}, headers=headers
+    ).status_code == 422

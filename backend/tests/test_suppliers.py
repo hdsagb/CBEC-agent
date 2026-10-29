@@ -312,3 +312,33 @@ def test_i12_currencies_and_empty_states(client, users):
 
     _seed_quotes(client, headers, "币种批次", [("供应商A", ROWS_A_USD), ("供应商B", ROWS_A_CNY)])
     assert client.get("/api/suppliers/currencies", headers=headers).json() == ["CNY", "USD"]
+
+
+def test_i13_quote_stats_paging(client, users):
+    """供应商统计在数据库侧聚合与分页：翻页不重叠、条数口径与 total 一致。"""
+    headers = users["merchandiser"]["headers"]
+    _seed_quotes(
+        client,
+        headers,
+        "统计分页批次",
+        [("供应商A", ROWS_A_USD), ("供应商B", ROWS_A_USD), ("供应商C", ROWS_B_USD)],
+    )
+
+    page1 = client.get(
+        "/api/suppliers/quote-stats", params={"page": 1, "page_size": 2}, headers=headers
+    ).json()
+    assert page1["total"] == 3
+    assert page1["page"] == 1 and page1["page_size"] == 2
+    assert len(page1["items"]) == 2
+    # 明细条数降序：A/B 各 2 条，C 1 条
+    assert [s["item_count"] for s in page1["items"]] == [2, 2]
+
+    page2 = client.get(
+        "/api/suppliers/quote-stats", params={"page": 2, "page_size": 2}, headers=headers
+    ).json()
+    assert page2["total"] == 3
+    assert len(page2["items"]) == 1
+    assert page2["items"][0]["item_count"] == 1
+
+    seen = {s["supplier_name"] for s in page1["items"]} | {s["supplier_name"] for s in page2["items"]}
+    assert seen == {"供应商A", "供应商B", "供应商C"}

@@ -5,7 +5,7 @@
 汇总「报价次数、覆盖品类、最近报价时间」等长期决策指标。
 """
 
-from sqlalchemy import or_
+from sqlalchemy import distinct, func, or_
 from sqlalchemy.orm import Session
 
 from app.models.quote import QuoteBatch, QuoteItem, QuoteSource
@@ -18,99 +18,118 @@ DEFAULT_CURRENCY = "CNY"
 SUPPLIER_STATUSES = {"active", "paused", "blacklisted"}
 
 
-def _price_stat(buckets: dict[str, list[float]]) -> list[dict]:
-    """把「币种 → 价格列表」整理为按币种的统计列表。"""
-    out: list[dict] = []
-    for currency in sorted(buckets):
-        prices = buckets[currency]
-        if not prices:
-            continue
-        out.append(
-            {
-                "currency": currency,
-                "item_count": len(prices),
-                "avg_price": round(sum(prices) / len(prices), 4),
-                "min_price": round(min(prices), 4),
-                "max_price": round(max(prices), 4),
-            }
-        )
-    return out
+def _supplier_key():
+    """供应商归档名：去掉首尾空格，空名称统一归入「未命名供应商」。"""
+    return func.coalesce(func.nullif(func.trim(QuoteSource.supplier_name), ""), UNKNOWN_SUPPLIER)
 
 
-def supplier_quote_stats(db: Session, keyword: str = "") -> list[dict]:
+def _currency_key():
+    """币种归档名：空值统一按默认币种统计，避免同一供应商拆成两档。"""
+    return func.coalesce(func.nullif(func.trim(QuoteItem.currency), ""), DEFAULT_CURRENCY)
+
+
+def _history_query(db: Session):
+    """历史报价明细的基础查询（报价来源 → 明细）。"""
+    return db.query(QuoteSource).join(QuoteItem, QuoteItem.source_id == QuoteSource.id)
+
+
+def supplier_quote_stats(
+    db: Session,
+    keyword: str = "",
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[dict], int]:
     """按供应商名称聚合历史报价概览，并回填已建档供应商的主数据信息。
 
-    返回结果按报价明细条数降序、名称升序排列，供前端分页展示。
+    聚合与分页均在数据库侧完成（GROUP BY + LIMIT/OFFSET），避免全表加载到内存。
+    返回 (当前页数据, 供应商总数)，按报价明细条数降序、名称升序排列。
     """
-    rows = (
-        db.query(
-            QuoteSource.supplier_name,
-            QuoteSource.batch_id,
-            QuoteSource.created_at,
-            QuoteItem.product_name,
-            QuoteItem.unit_price,
-            QuoteItem.currency,
-        )
-        .join(QuoteItem, QuoteItem.source_id == QuoteSource.id)
-        .all()
-    )
-
-    agg: dict[str, dict] = {}
-    for name, batch_id, created_at, product_name, price, currency in rows:
-        key = (name or "").strip() or UNKNOWN_SUPPLIER
-        slot = agg.setdefault(
-            key,
-            {
-                "supplier_name": key,
-                "item_count": 0,
-                "priced_count": 0,
-                "batches": set(),
-                "products": set(),
-                "currencies": set(),
-                "last_quote_at": None,
-                "price_buckets": {},
-            },
-        )
-        slot["item_count"] += 1
-        slot["batches"].add(batch_id)
-        if (product_name or "").strip():
-            slot["products"].add(product_name.strip())
-        if created_at and (slot["last_quote_at"] is None or created_at > slot["last_quote_at"]):
-            slot["last_quote_at"] = created_at
-        if price is None:
-            continue
-        slot["priced_count"] += 1
-        cur = (currency or DEFAULT_CURRENCY).strip() or DEFAULT_CURRENCY
-        slot["currencies"].add(cur)
-        slot["price_buckets"].setdefault(cur, []).append(float(price))
-
+    name_col = _supplier_key()
+    q = _history_query(db)
     kw = keyword.strip()
     if kw:
-        agg = {name: slot for name, slot in agg.items() if kw in name}
+        q = q.filter(name_col.like(f"%{kw}%"))
 
-    profiles = {s.name: s for s in db.query(Supplier).all()}
+    total = q.with_entities(func.count(distinct(name_col))).scalar() or 0
+    if total == 0:
+        return [], 0
 
-    out: list[dict] = []
-    for name, slot in agg.items():
-        profile = profiles.get(name)
-        out.append(
+    agg_rows = (
+        q.with_entities(
+            name_col.label("supplier_name"),
+            func.count(QuoteItem.id).label("item_count"),
+            func.count(QuoteItem.unit_price).label("priced_count"),
+            func.count(distinct(QuoteSource.batch_id)).label("batch_count"),
+            func.count(distinct(func.nullif(func.trim(QuoteItem.product_name), ""))).label(
+                "product_count"
+            ),
+            func.max(QuoteSource.created_at).label("last_quote_at"),
+        )
+        .group_by(name_col)
+        .order_by(func.count(QuoteItem.id).desc(), name_col)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    if not agg_rows:
+        return [], total
+
+    names = [row.supplier_name for row in agg_rows]
+
+    currency_col = _currency_key()
+    price_rows = (
+        db.query(
+            name_col.label("supplier_name"),
+            currency_col.label("currency"),
+            func.count(QuoteItem.id).label("item_count"),
+            func.avg(QuoteItem.unit_price).label("avg_price"),
+            func.min(QuoteItem.unit_price).label("min_price"),
+            func.max(QuoteItem.unit_price).label("max_price"),
+        )
+        .join(QuoteItem, QuoteItem.source_id == QuoteSource.id)
+        .filter(name_col.in_(names), QuoteItem.unit_price.isnot(None))
+        .group_by(name_col, currency_col)
+        .order_by(name_col, currency_col)
+        .all()
+    )
+    price_stats: dict[str, list[dict]] = {}
+    for row in price_rows:
+        price_stats.setdefault(row.supplier_name, []).append(
             {
-                "supplier_name": name,
-                "item_count": slot["item_count"],
-                "priced_count": slot["priced_count"],
-                "batch_count": len(slot["batches"]),
-                "product_count": len(slot["products"]),
-                "currencies": sorted(slot["currencies"]),
-                "last_quote_at": slot["last_quote_at"],
-                "price_stats": _price_stat(slot["price_buckets"]),
+                "currency": row.currency,
+                "item_count": row.item_count,
+                "avg_price": round(float(row.avg_price), 4),
+                "min_price": round(float(row.min_price), 4),
+                "max_price": round(float(row.max_price), 4),
+            }
+        )
+
+    profiles = {
+        supplier.name: supplier
+        for supplier in db.query(Supplier).filter(Supplier.name.in_(names)).all()
+    }
+
+    items: list[dict] = []
+    for row in agg_rows:
+        profile = profiles.get(row.supplier_name)
+        stats = price_stats.get(row.supplier_name, [])
+        items.append(
+            {
+                "supplier_name": row.supplier_name,
+                "item_count": row.item_count,
+                "priced_count": row.priced_count,
+                "batch_count": row.batch_count,
+                "product_count": row.product_count,
+                "currencies": [stat["currency"] for stat in stats],
+                "last_quote_at": row.last_quote_at,
+                "price_stats": stats,
                 "supplier_id": profile.id if profile else None,
                 "status": profile.status if profile else "",
                 "rating": profile.rating if profile else 0.0,
                 "region": profile.region if profile else "",
             }
         )
-    out.sort(key=lambda s: (-s["item_count"], s["supplier_name"]))
-    return out
+    return items, total
 
 
 def _quote_query(db: Session, keyword: str, supplier_name: str, currency: str):

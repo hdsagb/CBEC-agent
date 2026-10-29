@@ -27,6 +27,17 @@
             {{ statusText(currentBatch.status) }}
           </el-tag>
         </div>
+        <el-pagination
+          v-model:current-page="batchQuery.page"
+          v-model:page-size="batchQuery.page_size"
+          :total="batchTotal"
+          :page-sizes="[10, 20, 50]"
+          layout="total, sizes, prev, pager, next"
+          background
+          small
+          @current-change="loadBatches"
+          @size-change="handleBatchSizeChange"
+        />
       </div>
     </el-card>
 
@@ -343,6 +354,8 @@ const DIMENSIONS = [
 ]
 
 const batches = ref<QuoteBatch[]>([])
+const batchTotal = ref(0)
+const batchQuery = reactive({ page: 1, page_size: 10 })
 const currentBatchId = ref<number | null>(null)
 const currentBatch = ref<QuoteBatch | null>(null)
 
@@ -441,14 +454,30 @@ function rowClassName({ row }: { row: { is_best: boolean } }): string {
 
 async function loadBatches() {
   try {
-    batches.value = await fetchQuoteBatches()
+    const res = await fetchQuoteBatches({ page: batchQuery.page, page_size: batchQuery.page_size })
+    batches.value = res.items
+    batchTotal.value = res.total
+    // 翻页后原选中批次不在当前页时，自动切到本页第一条，避免下拉框显示成裸 id
+    const exists = currentBatchId.value !== null && res.items.some((b) => b.id === currentBatchId.value)
+    if (!exists) {
+      currentBatchId.value = res.items.length ? res.items[0].id : null
+      await handleBatchChange()
+    }
   } catch (e) {
     ElMessage.error(errorMessage(e, '加载批次列表失败'))
   }
 }
 
+function handleBatchSizeChange() {
+  batchQuery.page = 1
+  loadBatches()
+}
+
 async function loadCurrentBatch() {
-  if (currentBatchId.value === null) return
+  if (currentBatchId.value === null) {
+    currentBatch.value = null
+    return
+  }
   currentBatch.value = await fetchQuoteBatch(currentBatchId.value)
 }
 
@@ -482,10 +511,12 @@ async function handleCreateBatch() {
   creatingBatch.value = true
   try {
     const batch = await createQuoteBatch(name)
-    batches.value = [batch, ...batches.value]
+    // 新批次创建时间最新，回到第 1 页刷新列表并选中它
+    batchQuery.page = 1
     currentBatchId.value = batch.id
     newBatchName.value = ''
     batchDialogVisible.value = false
+    await loadBatches()
     await handleBatchChange()
     ElMessage.success('批次已创建')
   } catch (e) {
@@ -661,11 +692,8 @@ async function handleCheckBatch() {
 }
 
 onMounted(async () => {
+  // 首屏只加载第 1 页批次；未选中批次时由 loadBatches 自动选中本页第一条并加载明细
   await loadBatches()
-  if (batches.value.length) {
-    currentBatchId.value = batches.value[0].id
-    await handleBatchChange()
-  }
 })
 </script>
 
@@ -690,6 +718,9 @@ onMounted(async () => {
 .batch-bar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 .batch-select {
   display: flex;

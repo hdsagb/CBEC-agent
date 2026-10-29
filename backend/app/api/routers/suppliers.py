@@ -80,14 +80,10 @@ def quote_stats(
     user: User = Depends(get_current_user),
 ) -> SupplierQuoteStatPage:
     """历史报价库概览：按供应商名称聚合报价次数、覆盖品类、最近报价时间。"""
-    stats = supplier_service.supplier_quote_stats(db, keyword=keyword)
-    start = (page - 1) * page_size
-    return SupplierQuoteStatPage(
-        items=stats[start : start + page_size],
-        total=len(stats),
-        page=page,
-        page_size=page_size,
+    items, total = supplier_service.supplier_quote_stats(
+        db, keyword=keyword, page=page, page_size=page_size
     )
+    return SupplierQuoteStatPage(items=items, total=total, page=page, page_size=page_size)
 
 
 @router.get("/quotes", response_model=SupplierQuotePage)

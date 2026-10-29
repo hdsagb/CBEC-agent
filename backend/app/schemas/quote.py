@@ -54,6 +54,13 @@ class QuoteBatchOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class QuoteBatchPage(BaseModel):
+    items: list[QuoteBatchOut]
+    total: int
+    page: int
+    page_size: int
+
+
 class CompareRequest(BaseModel):
     # 批次 ID 由路径提供，body 中可选
     batch_id: int | None = None

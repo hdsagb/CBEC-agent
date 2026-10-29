@@ -1,7 +1,7 @@
 import os
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -16,7 +16,13 @@ from app.schemas.price_reference import (
     PriceCheckRequest,
     PriceCheckResult,
 )
-from app.schemas.quote import CompareRequest, QuoteBatchOut, QuoteItemConfirm, QuoteItemOut
+from app.schemas.quote import (
+    CompareRequest,
+    QuoteBatchOut,
+    QuoteBatchPage,
+    QuoteItemConfirm,
+    QuoteItemOut,
+)
 from app.services import comparison, price_reference, quote_parser
 
 router = APIRouter(prefix="/api/quotes", tags=["quotes"])
@@ -39,12 +45,23 @@ def create_batch(
     return batch
 
 
-@router.get("/batches", response_model=list[QuoteBatchOut])
+@router.get("/batches", response_model=QuoteBatchPage)
 def list_batches(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
-) -> list[QuoteBatch]:
-    return db.query(QuoteBatch).order_by(QuoteBatch.created_at.desc()).all()
+) -> QuoteBatchPage:
+    """批次列表分页：按创建时间倒序，附带来源明细供前端展示报价份数。"""
+    q = db.query(QuoteBatch)
+    total = q.count()
+    items = (
+        q.order_by(QuoteBatch.created_at.desc(), QuoteBatch.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return QuoteBatchPage(items=items, total=total, page=page, page_size=page_size)
 
 
 @router.get("/batches/{batch_id}", response_model=QuoteBatchOut)
