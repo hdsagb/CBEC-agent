@@ -68,7 +68,7 @@
             <el-button link type="primary" @click="openDeclarationText(row)">复制报关文本</el-button>
             <el-button v-if="canEdit" link type="primary" @click="openEdit(row)">编辑</el-button>
             <el-button v-if="canEdit" link type="primary" @click="handleDuplicate(row)">复制复用</el-button>
-            <el-button v-if="isAdmin" link type="danger" @click="handleDelete(row)">删除</el-button>
+            <el-button v-if="canDelete" link type="danger" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -245,15 +245,16 @@ import {
   type ElementItem,
   type ElementPayload,
 } from '@/api/elements'
+import { errorMessage } from '@/api/error'
 import { fetchElementPriceReference, type PriceMatchBy, type PriceReference } from '@/api/priceReference'
+import { can } from '@/permissions'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
 const route = useRoute()
 
-const ROLE_LEVEL: Record<string, number> = { merchandiser: 0, customs: 1, admin: 2 }
-const canEdit = computed(() => (ROLE_LEVEL[auth.user?.role ?? ''] ?? -1) >= 1)
-const isAdmin = computed(() => auth.user?.role === 'admin')
+const canEdit = computed(() => can(auth.user?.role, 'elements.write'))
+const canDelete = computed(() => can(auth.user?.role, 'elements.delete'))
 
 const loading = ref(false)
 const rows = ref<ElementItem[]>([])
@@ -312,11 +313,6 @@ const rules: FormRules = {
 
 function formatTime(value: string): string {
   return value ? value.replace('T', ' ').slice(0, 19) : '-'
-}
-
-function errorMessage(e: unknown, fallback: string): string {
-  const detail = (e as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
-  return typeof detail === 'string' ? detail : fallback
 }
 
 function parsedExtra(json: string): { name: string; value: string }[] {

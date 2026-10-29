@@ -55,7 +55,7 @@
     <!-- ================= 左侧导航 ================= -->
     <aside class="rail" role="navigation" aria-label="主导航">
       <div class="rail-label">智能助理</div>
-      <RouterLink :to="{ name: 'agent' }" class="nav-item" active-class="is-active">
+      <RouterLink v-if="allow('agent.use')" :to="{ name: 'agent' }" class="nav-item" active-class="is-active">
         <svg viewBox="0 0 24 24" fill="none">
           <path d="M12 3l2.2 5.1L20 9.3l-4 3.7L17 19l-5-2.8L7 19l1-6-4-3.7 5.8-1.2L12 3Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
         </svg>
@@ -63,7 +63,7 @@
       </RouterLink>
 
       <div class="rail-label">业务工作台</div>
-      <RouterLink :to="{ name: 'dashboard' }" class="nav-item" active-class="is-active">
+      <RouterLink v-if="allow('dashboard.view')" :to="{ name: 'dashboard' }" class="nav-item" active-class="is-active">
         <svg viewBox="0 0 24 24" fill="none">
           <rect x="3" y="3" width="8" height="8" rx="2" stroke="currentColor" stroke-width="1.7" />
           <rect x="13" y="3" width="8" height="5" rx="2" stroke="currentColor" stroke-width="1.7" />
@@ -72,20 +72,20 @@
         </svg>
         <span class="txt">工作台</span>
       </RouterLink>
-      <RouterLink :to="{ name: 'elements' }" class="nav-item" active-class="is-active">
+      <RouterLink v-if="allow('elements.read')" :to="{ name: 'elements' }" class="nav-item" active-class="is-active">
         <svg viewBox="0 0 24 24" fill="none">
           <path d="M5 4h11l3 3v13H5V4Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
           <path d="M8 9h7M8 13h7M8 17h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
         </svg>
         <span class="txt">申报要素库</span>
       </RouterLink>
-      <RouterLink :to="{ name: 'quotes' }" class="nav-item" active-class="is-active">
+      <RouterLink v-if="allow('quotes.use')" :to="{ name: 'quotes' }" class="nav-item" active-class="is-active">
         <svg viewBox="0 0 24 24" fill="none">
           <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
         </svg>
         <span class="txt">智能比价</span>
       </RouterLink>
-      <RouterLink :to="{ name: 'suppliers' }" class="nav-item" active-class="is-active">
+      <RouterLink v-if="allow('suppliers.read')" :to="{ name: 'suppliers' }" class="nav-item" active-class="is-active">
         <svg viewBox="0 0 24 24" fill="none">
           <path d="M3 17V7h11v10" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
           <path d="M14 10h4l3 3v4h-7" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
@@ -94,14 +94,14 @@
         </svg>
         <span class="txt">供应商库</span>
       </RouterLink>
-      <RouterLink :to="{ name: 'marks' }" class="nav-item" active-class="is-active">
+      <RouterLink v-if="allow('marks.use')" :to="{ name: 'marks' }" class="nav-item" active-class="is-active">
         <svg viewBox="0 0 24 24" fill="none">
           <rect x="3" y="4" width="18" height="16" rx="2" stroke="currentColor" stroke-width="1.7" />
           <path d="M3 9h18M7 13h4M7 16h7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
         </svg>
         <span class="txt">箱唛生成</span>
       </RouterLink>
-      <RouterLink :to="{ name: 'reports' }" class="nav-item" active-class="is-active">
+      <RouterLink v-if="allow('reports.read')" :to="{ name: 'reports' }" class="nav-item" active-class="is-active">
         <svg viewBox="0 0 24 24" fill="none">
           <path d="M3 21h18" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
           <path d="M6 21V11l5-3.4V21" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
@@ -110,7 +110,7 @@
         <span class="txt">数据分析</span>
       </RouterLink>
 
-      <template v-if="isAdmin">
+      <template v-if="allow('admin.access')">
         <div class="rail-label">系统</div>
         <RouterLink :to="{ name: 'admin' }" class="nav-item" active-class="is-active">
           <svg viewBox="0 0 24 24" fill="none">
@@ -138,25 +138,22 @@
 
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 
+import { can, permissionForRoute, roleLabel as toRoleLabel, type Permission } from '@/permissions'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
 const router = useRouter()
 const keyword = ref('')
 
-const isAdmin = computed(() => auth.user?.role === 'admin')
-
-const ROLE_LABEL: Record<string, string> = {
-  merchandiser: '业务员',
-  customs: '关务员',
-  admin: '管理员',
+function allow(permission: Permission): boolean {
+  return can(auth.user?.role, permission)
 }
 
 const displayName = computed(() => auth.user?.display_name || auth.user?.username || '未登录')
-const roleLabel = computed(() => ROLE_LABEL[auth.user?.role ?? ''] ?? auth.user?.role ?? '')
+const roleLabel = computed(() => toRoleLabel(auth.user?.role))
 const initials = computed(() => {
   const name = auth.user?.display_name || auth.user?.username || ''
   return name ? name.slice(0, 2).toUpperCase() : 'U'
@@ -177,6 +174,21 @@ function handleLogout() {
   auth.logout()
   router.push({ name: 'login' })
 }
+
+onMounted(() => {
+  // 以服务端角色为准刷新一次；角色被调整后菜单会立即按新权限重算
+  void auth.refreshMe()
+})
+
+watch(
+  () => auth.user?.role,
+  (role) => {
+    const permission = permissionForRoute(router.currentRoute.value.name)
+    if (permission && !can(role, permission)) {
+      router.replace({ name: 'forbidden' })
+    }
+  },
+)
 </script>
 
 <style scoped>

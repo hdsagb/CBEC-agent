@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import MainLayout from '@/layouts/MainLayout.vue'
+import { can, currentRole, permissionForRoute } from '@/permissions'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -24,15 +25,20 @@ const router = createRouter({
         { path: 'reports', name: 'reports', component: () => import('@/views/ReportsView.vue') },
         { path: 'suppliers', name: 'suppliers', component: () => import('@/views/SuppliersView.vue') },
         { path: 'admin', name: 'admin', component: () => import('@/views/AdminView.vue') },
+        { path: '403', name: 'forbidden', component: () => import('@/views/ForbiddenView.vue') },
       ],
     },
   ],
 })
 
 router.beforeEach((to) => {
-  const token = localStorage.getItem('token')
-  if (!to.meta.public && !token) {
-    return { name: 'login' }
+  if (!to.meta.public && !localStorage.getItem('token')) {
+    return { name: 'login', query: { redirect: to.fullPath } }
+  }
+  // 按路由名查权限矩阵；未登记的路由（登录、403）只校验登录态
+  const permission = permissionForRoute(to.name)
+  if (permission && !can(currentRole(), permission)) {
+    return { name: 'forbidden', query: { from: to.fullPath } }
   }
 })
 

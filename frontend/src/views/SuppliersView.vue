@@ -77,7 +77,7 @@
                 <template #default="{ row }">
                   <el-button link type="primary" @click="openQuotes(row)">历史报价</el-button>
                   <el-button v-if="canEdit" link type="primary" @click="openEdit(row)">编辑</el-button>
-                  <el-button v-if="isAdmin" link type="danger" @click="handleDelete(row)">删除</el-button>
+                  <el-button v-if="canDelete" link type="danger" @click="handleDelete(row)">删除</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -332,6 +332,7 @@
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
 
+import { errorMessage } from '@/api/error'
 import { useAuthStore } from '@/stores/auth'
 import {
   createSupplier,
@@ -348,11 +349,11 @@ import {
   type SupplierQuoteRow,
   type SupplierQuoteStat,
 } from '@/api/suppliers'
+import { can } from '@/permissions'
 
 const auth = useAuthStore()
-const ROLE_LEVEL: Record<string, number> = { merchandiser: 0, customs: 1, admin: 2 }
-const canEdit = computed(() => (ROLE_LEVEL[auth.user?.role ?? ''] ?? -1) >= 1)
-const isAdmin = computed(() => auth.user?.role === 'admin')
+const canEdit = computed(() => can(auth.user?.role, 'suppliers.write'))
+const canDelete = computed(() => can(auth.user?.role, 'suppliers.delete'))
 
 const STATUS_OPTIONS = [
   { value: 'active', label: '合作中' },
@@ -424,11 +425,6 @@ function fmtNum(value: number | null | undefined): string {
 
 function formatTime(value: string | null): string {
   return value ? value.replace('T', ' ').slice(0, 19) : '-'
-}
-
-function errorMessage(e: unknown, fallback: string): string {
-  const detail = (e as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
-  return typeof detail === 'string' ? detail : fallback
 }
 
 // ---------------- 档案 ----------------
