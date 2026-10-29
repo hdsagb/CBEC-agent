@@ -8,7 +8,7 @@
 #
 # 可用环境变量覆盖默认值：
 #   WEB_PORT=8080        对外端口（健康检查用）
-#   NPM_REGISTRY=...     npm 源（默认不指定，沿用本机配置）
+#   NPM_REGISTRY=...     npm 源（默认 https://registry.npmmirror.com）
 #   HEALTH_RETRIES=60    健康检查最大尝试次数，每次间隔 2 秒
 set -euo pipefail
 
@@ -16,6 +16,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$ROOT_DIR/deploy/docker-compose.yml"
 WEB_PORT="${WEB_PORT:-8080}"
 HEALTH_RETRIES="${HEALTH_RETRIES:-60}"
+NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
 LOCK_FILE="${TMPDIR:-/tmp}/cbec-release.lock"
 
 DO_PULL=1
@@ -59,8 +60,7 @@ if [ "$DO_FRONTEND" -eq 1 ]; then
         exit 1
     }
     log "构建前端"
-    npm_args=(ci --no-audit --no-fund)
-    [ -n "${NPM_REGISTRY:-}" ] && npm_args+=(--registry="$NPM_REGISTRY")
+    npm_args=(ci --no-audit --no-fund --registry="$NPM_REGISTRY")
     ( cd "$ROOT_DIR/frontend" && npm "${npm_args[@]}" && npm run build )
     [ -f "$ROOT_DIR/frontend/dist/index.html" ] || {
         echo "前端构建产物缺失：frontend/dist/index.html" >&2

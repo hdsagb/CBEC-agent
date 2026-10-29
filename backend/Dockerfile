@@ -6,7 +6,11 @@ WORKDIR /app
 #    （fonts-noto-cjk 为 CFF 轮廓，reportlab 无法嵌入，故用文泉驿 / Droid 兜底）
 # 2) libgomp1 是 onnxruntime（RapidOCR 图片报价单识别）的运行时依赖，缺失时
 #    OCR 引擎会静默降级为不可用，图片解析退化成空结果
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# 3) 服务器直连 deb.debian.org 很慢（9 MB 索引要几十秒），构建时先换阿里云镜像
+RUN for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources; do \
+        [ -f "$f" ] && sed -i 's|deb.debian.org|mirrors.aliyun.com|g' "$f"; \
+    done \
+    && apt-get update && apt-get install -y --no-install-recommends \
         fonts-wqy-microhei \
         fonts-droid-fallback \
         libgomp1 \
