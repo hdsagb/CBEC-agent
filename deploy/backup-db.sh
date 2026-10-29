@@ -4,7 +4,7 @@
 # 用法（在服务器 ~/CBEC-agent 目录下）：
 #   ./deploy/backup-db.sh                 # 手动跑一次
 #   crontab -e 里加：
-#     30 3 * * * /home/admin/CBEC-agent/deploy/backup-db.sh >> /var/log/cbec-backup.log 2>&1
+#     30 3 * * * cd /root/CBEC-agent && ./deploy/backup-db.sh >> /var/log/cbec-backup.log 2>&1
 #
 # 备份写到应用目录之外（默认 /var/backups/cbec），避免重新部署时被覆盖；
 # 可用 BACKUP_DIR / KEEP / COMPOSE_FILE 环境变量覆盖默认值。
@@ -25,8 +25,9 @@ docker compose -f "$COMPOSE_FILE" exec -T postgres \
 mv "$TARGET.tmp" "$TARGET"
 
 # 完整性校验：能列出归档目录说明文件结构完好，可被 pg_restore 使用
+# 注意 pg_restore 不接受 "-" 作为 stdin 占位符，省略文件名即从标准输入读取
 if ! docker compose -f "$COMPOSE_FILE" exec -T postgres \
-        pg_restore -l - < "$TARGET" > /dev/null; then
+        pg_restore -l < "$TARGET" > /dev/null; then
     echo "[$(date '+%F %T')] 校验失败，已删除: $TARGET" >&2
     rm -f "$TARGET"
     exit 1
