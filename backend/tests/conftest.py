@@ -18,6 +18,8 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB.as_posix()}"
 os.environ["UPLOAD_DIR"] = str(Path(tempfile.gettempdir()) / "_pytest_cbec_uploads")
 # 启动自检会拒绝示例密钥，测试环境注入固定长密钥（环境变量优先于 .env）
 os.environ["JWT_SECRET"] = "pytest-only-secret-0123456789abcdef"
+# 模型 API Key 加密密钥（仅测试用固定值）
+os.environ["LLM_CONFIG_SECRET"] = "pytest-only-llm-secret-0123456789abcdef"
 
 import pytest
 from fastapi.testclient import TestClient

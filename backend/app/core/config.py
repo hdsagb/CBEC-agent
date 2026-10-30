@@ -32,11 +32,20 @@ class Settings(BaseSettings):
 
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
-    # LLM 适配层
-    llm_provider: str = "deepseek"
+    # ===== LLM 适配层 =====
+    # 以下取值仅作为「首次启动的引导配置 / 兜底」：管理员在页面上保存的配置
+    # 存在数据库 llm_config 表中，且优先级高于环境变量。
+    llm_provider: str = "openai"
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
+
+    # 数据库中 API Key 的加密密钥（至少 16 位随机串）；未设置时只能使用环境变量配置，
+    # 页面保存密钥会提示服务端未配置该密钥。
+    llm_config_secret: str = ""
+    # 允许访问的模型服务域名白名单（JSON 数组）。留空表示允许任意公网 HTTPS 地址，
+    # 但始终拒绝环回地址、内网 IP 与带账号密码的 URL，避免 SSRF。
+    llm_allowed_base_urls: list[str] = []
 
     # 多模态（图片报价单识别）：llm_vision_model 留空表示不启用，
     # 图片解析回退到本地 OCR。base_url / api_key 留空时复用 DeepSeek 配置。

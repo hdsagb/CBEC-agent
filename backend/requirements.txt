@@ -12,6 +12,8 @@ openpyxl>=3.1
 python-docx>=1.1
 pypdf>=4.2
 psycopg2-binary>=2.9
+# 模型 API Key 落库加密（Fernet）
+cryptography>=42.0
 
 # 图片报价单识别（本地 OCR 兜底）
 rapidocr>=2.0

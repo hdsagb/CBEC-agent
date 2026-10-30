@@ -50,7 +50,10 @@
           <div class="t">{{ activeSession?.title || '新会话' }}</div>
           <div class="d">{{ headDesc }}</div>
         </div>
-        <div class="chip-model"><span class="dot"></span> deepseek-chat</div>
+        <button class="chip-model" type="button" :title="llmTitle" @click="openLLMDialog">
+          <span class="dot" :class="llmDotClass"></span>
+          {{ llmModelLabel }}
+        </button>
       </div>
 
       <div ref="streamRef" class="stream">
@@ -294,12 +297,15 @@
         <div v-for="s in toolStats" :key="s.name" class="kv"><span>{{ s.name }}</span><b>{{ s.count }} 次</b></div>
       </div>
     </div>
+
+    <!-- 点击右上角模型芯片后，在画面中心弹出的配置窗口 -->
+    <LLMModelDialog v-model="modelDialogVisible" :config="llmConfig" @saved="handleLLMSaved" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import {
@@ -316,6 +322,8 @@ import {
   type ToolResult,
 } from '@/api/agent'
 import { fetchDeclarationText } from '@/api/elements'
+import { fetchLLMConfig, llmStatusLabel, refreshLLMStatus, type LLMConfig } from '@/api/settings'
+import LLMModelDialog from '@/components/LLMModelDialog.vue'
 import ToolIcon from '@/components/ToolIcon.vue'
 import { useAuthStore } from '@/stores/auth'
 
@@ -370,6 +378,31 @@ const draft = ref('')
 const sending = ref(false)
 const streamRef = ref<HTMLElement>()
 const inputRef = ref<HTMLTextAreaElement>()
+
+/* ---------------- 大模型状态 ---------------- */
+const llmConfig = ref<LLMConfig | null>(null)
+const modelDialogVisible = ref(false)
+let llmPollTimer: ReturnType<typeof setInterval> | undefined
+
+const llmDotClass = computed(() => {
+  const status = llmConfig.value?.status ?? 'unconfigured'
+  if (status === 'ok') return 'ok'
+  if (status === 'unconfigured') return 'idle'
+  if (status === 'unknown') return 'warn'
+  return 'bad'
+})
+
+const llmModelLabel = computed(() => llmConfig.value?.model || '未配置模型')
+
+const llmTitle = computed(() => {
+  const config = llmConfig.value
+  if (!config) return '点击配置大模型'
+  const status = llmStatusLabel(config.status)
+  const lines = [`状态：${status}`, `接口：${config.base_url || '未配置'}`]
+  if (config.status !== 'ok' && config.status_message) lines.push(config.status_message)
+  lines.push('点击修改配置')
+  return lines.join('\n')
+})
 
 const initials = computed(() => {
   const name = auth.user?.display_name || auth.user?.username || ''
@@ -638,6 +671,44 @@ async function loadTools() {
   }
 }
 
+/* ---------------- 大模型状态 ---------------- */
+
+async function loadLLMConfig() {
+  try {
+    llmConfig.value = await fetchLLMConfig()
+  } catch {
+    // 未登录或接口异常时保持默认灰点，不打断对话
+  }
+}
+
+async function pollLLMStatus() {
+  try {
+    const result = await refreshLLMStatus()
+    llmConfig.value = result.config
+  } catch {
+    // 探测失败静默处理，芯片保留上一次状态
+  }
+}
+
+function openLLMDialog() {
+  modelDialogVisible.value = true
+}
+
+function handleLLMSaved(config: LLMConfig) {
+  llmConfig.value = config
+  void pollLLMStatus()
+}
+
+function onDocumentVisibility() {
+  if (!document.hidden) void pollLLMStatus()
+}
+
+function startLLMPolling() {
+  llmPollTimer = window.setInterval(() => {
+    if (!document.hidden) void pollLLMStatus()
+  }, 60000)
+}
+
 async function loadSessions() {
   sessionsLoading.value = true
   try {
@@ -796,11 +867,22 @@ async function copyDeclaration(itemId: number) {
 }
 
 onMounted(async () => {
+  // 芯片先用持久化的状态快速渲染，再异步真实探测一次
+  void loadLLMConfig()
+  void pollLLMStatus()
+  startLLMPolling()
+  document.addEventListener('visibilitychange', onDocumentVisibility)
+
   await Promise.all([loadTools(), loadSessions()])
   if (sessions.value.length) {
     activeSessionId.value = sessions.value[0].id
     await loadMessages(activeSessionId.value)
   }
+})
+
+onBeforeUnmount(() => {
+  if (llmPollTimer) clearInterval(llmPollTimer)
+  document.removeEventListener('visibilitychange', onDocumentVisibility)
 })
 </script>
 
@@ -984,12 +1066,20 @@ onMounted(async () => {
   align-items: center;
   gap: 6px;
   font-size: 11.5px;
+  font-family: inherit;
   color: var(--text-2);
   border: 1px solid var(--border);
   background: var(--surface-2);
   border-radius: var(--radius-pill);
   padding: 5px 11px;
   white-space: nowrap;
+  cursor: pointer;
+  transition: 0.15s;
+}
+
+.chip-model:hover {
+  border-color: var(--brand-500);
+  color: var(--text);
 }
 
 .dot {
@@ -998,6 +1088,25 @@ onMounted(async () => {
   border-radius: 50%;
   background: var(--brand-500);
   box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.18);
+}
+
+.dot.ok {
+  background: var(--brand-500);
+}
+
+.dot.idle {
+  background: #9ca3af;
+  box-shadow: 0 0 0 3px rgba(156, 163, 175, 0.16);
+}
+
+.dot.warn {
+  background: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.16);
+}
+
+.dot.bad {
+  background: #ef4444;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.16);
 }
 
 .stream {

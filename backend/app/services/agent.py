@@ -329,8 +329,8 @@ def _history_messages(db: Session, session_id: int) -> list[dict]:
 
 def _fallback_reply(exc: Exception) -> str:
     return (
-        f"LLM 暂不可用（{exc}）。请检查 DEEPSEEK_API_KEY 配置与网络，"
-        "或改用「申报要素库 / 智能比价 / 箱唛」页面直接操作。"
+        f"LLM 暂不可用（{exc}）。请点击对话页右上角的模型标识检查接口地址、"
+        "模型名称与 API Key，或改用「申报要素库 / 智能比价 / 箱唛」页面直接操作。"
     )
 
 

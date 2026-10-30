@@ -9,7 +9,16 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
-from app.api.routers import agent, auth, elements, marks, quotes, reports, suppliers
+from app.api.routers import (
+    agent,
+    auth,
+    elements,
+    marks,
+    quotes,
+    reports,
+    settings as settings_router,
+    suppliers,
+)
 from app.core.config import settings
 from app.db import Base, SessionLocal, engine
 
@@ -60,6 +69,7 @@ app.include_router(marks.router)
 app.include_router(agent.router)
 app.include_router(reports.router)
 app.include_router(suppliers.router)
+app.include_router(settings_router.router)
 
 # 导出产物（箱唛 PDF/PNG 等）通过 /uploads 直链访问
 os.makedirs(settings.upload_dir, exist_ok=True)
